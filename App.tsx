@@ -1,7 +1,7 @@
 // App.tsx
 import 'react-native-gesture-handler';
 import React from 'react';
-import { StatusBar } from 'react-native';
+import { StatusBar, View, ActivityIndicator, Image } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import * as Font from 'expo-font';
@@ -77,9 +77,14 @@ export default function App() {
     'Open Dyslexic': require('./assets/fonts/OpenDyslexic-Regular.otf'),
   });
 
-  if (!fontsLoaded) {
-    return <LoadingScreen />;
-  }
+   if (!fontsLoaded) {
+     return (
+       <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#fff9c4' }}>
+         <Image source={require('./assets/icons/logo.png')} style={{ width: 120, height: 120, marginBottom: 16 }} />
+         <ActivityIndicator />
+       </View>
+     );
+   }
 
   // Grouped route tables (typed so route names must exist in RootStackParamList)
   const AUTH_SCREENS: ScreenTuple[] = [

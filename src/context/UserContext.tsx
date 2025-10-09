@@ -1,46 +1,63 @@
-import React, { createContext, useContext, useEffect, useState, ReactNode } from 'react';
+// src/context/UserContext.tsx
+import React, { createContext, useContext, useEffect, useMemo, useState, ReactNode, useCallback } from 'react';
 import { supabase } from '../lib/supabaseClient';
-import { Session, User } from '@supabase/supabase-js';
+import type { Session, User } from '@supabase/supabase-js';
 
 interface UserContextType {
   user: User | null;
   session: Session | null;
+  loading: boolean;
+  refresh: () => Promise<void>;
+  signOut: () => Promise<void>;
 }
 
-const UserContext = createContext<UserContextType>({ user: null, session: null });
+const UserContext = createContext<UserContextType>({
+  user: null,
+  session: null,
+  loading: true,
+  refresh: async () => {},
+  signOut: async () => {},
+});
 
 export const UserProvider = ({ children }: { children: ReactNode }) => {
   const [session, setSession] = useState<Session | null>(null);
   const [user, setUser] = useState<User | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  const refresh = useCallback(async () => {
+    const { data } = await supabase.auth.getSession();
+    setSession(data?.session ?? null);
+    setUser(data?.session?.user ?? null);
+  }, []);
 
   useEffect(() => {
-    const fetchSession = async () => {
-      const { data, error } = await supabase.auth.getSession();
-      if (data?.session) {
-        setSession(data.session);
-        setUser(data.session.user);
-      }
-    };
+    (async () => {
+      await refresh();
+      setLoading(false);
+    })();
 
-    fetchSession();
-
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session);
-      setUser(session?.user ?? null);
+    const { data } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      setSession(nextSession);
+      setUser(nextSession?.user ?? null);
+      setLoading(false);
     });
 
     return () => {
-      subscription.unsubscribe();
+      data.subscription.unsubscribe();
     };
-  }, []);
+  }, [refresh]);
 
-  return (
-    <UserContext.Provider value={{ user, session }}>
-      {children}
-    </UserContext.Provider>
+  const signOut = useCallback(async () => {
+    await supabase.auth.signOut();
+    await refresh();
+  }, [refresh]);
+
+  const value = useMemo(
+    () => ({ user, session, loading, refresh, signOut }),
+    [user, session, loading, refresh, signOut]
   );
+
+  return <UserContext.Provider value={value}>{children}</UserContext.Provider>;
 };
 
 export const useUser = () => useContext(UserContext);

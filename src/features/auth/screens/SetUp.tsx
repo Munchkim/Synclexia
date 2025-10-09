@@ -1,7 +1,5 @@
 import React, { useCallback, useState } from 'react';
-import {
-  View, Text, TextInput, StyleSheet, TouchableOpacity, Alert, BackHandler,
-} from 'react-native';
+import { View, Text, TextInput, StyleSheet, TouchableOpacity, Alert, BackHandler } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { useAppSettings } from '../../../context/AppSettings';
 import { supabase } from '../../../lib/supabaseClient';
@@ -30,22 +28,15 @@ const SetupScreen: React.FC<Props> = ({ navigation, route }) => {
   const fontSizeValue = fontSize === 'small' ? 14 : fontSize === 'large' ? 20 : 16;
 
   const [name, setName] = useState('');
-  const [birthdate, setBirthdate] = useState(''); // YYYY-MM-DD
+  const [birthdate, setBirthdate] = useState('');
   const [saving, setSaving] = useState(false);
 
+  // block hardware back entirely
   useFocusEffect(
     useCallback(() => {
-      const onBackPress = () => {
-        Alert.alert(
-          'Exit Setup?',
-          'Are you sure you want to exit? Your setup progress will not be saved.',
-          [{ text: 'Cancel', style: 'cancel' }, { text: 'Exit', onPress: () => navigation.navigate('Login') }],
-        );
-        return true;
-      };
-      const sub = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+      const sub = BackHandler.addEventListener('hardwareBackPress', () => true);
       return () => sub.remove();
-    }, [navigation])
+    }, [])
   );
 
   const handleApply = async () => {
@@ -63,7 +54,6 @@ const SetupScreen: React.FC<Props> = ({ navigation, route }) => {
 
     setSaving(true);
     try {
-      // Ensure session & get user
       const { data: auth } = await supabase.auth.getUser();
       const user = auth?.user;
       const userId = paramUserId || user?.id;
@@ -73,41 +63,31 @@ const SetupScreen: React.FC<Props> = ({ navigation, route }) => {
         return;
       }
 
-      // Update auth metadata (username) so Account/Profile also see it
       const { error: authErr } = await supabase.auth.updateUser({ data: { username: nm } });
       if (authErr) {
         Alert.alert('Error', authErr.message || 'Failed to update profile.');
         return;
       }
 
-      // Upsert app profile (what Account reads/edits)
       const nowIso = new Date().toISOString();
       const { error: dbErr } = await supabase
         .from('users')
         .upsert(
-          {
-            id: userId,
-            username: nm,
-            birthdate: bd,
-            last_birthdate_update: nowIso, // Initial set counts as last update (Profile enforces cooldown)
-            is_setup_complete: true,
-            updated_at: nowIso,
-          },
+          { id: userId, username: nm, birthdate: bd, last_birthdate_update: nowIso, is_setup_complete: true, updated_at: nowIso },
           { onConflict: 'id' }
         );
-
       if (dbErr) {
         Alert.alert('Error', dbErr.message || 'Failed to save your profile.');
         return;
       }
 
-      // (Best effort) mirror to profiles table if present
+      // optional best-effort mirror
       try {
         await supabase.from('profiles').upsert(
           { id: userId, full_name: nm, avatar_url: null, updated_at: nowIso },
           { onConflict: 'id' }
         );
-      } catch { /* ignore if table not present */ }
+      } catch {}
 
       navigation.reset({ index: 0, routes: [{ name: 'Dashboard' }] });
     } catch (e: any) {
@@ -121,7 +101,6 @@ const SetupScreen: React.FC<Props> = ({ navigation, route }) => {
     <View style={[styles.container, { backgroundColor: bgColor }]}>
       <View style={[styles.box, { backgroundColor: accentColor }]}>
         <Text style={[styles.title, { fontFamily }]}>Welcome to Synclexia!</Text>
-
         <Text style={[styles.label, { fontFamily, fontSize: fontSizeValue }]}>What should we call you?</Text>
         <TextInput
           placeholder="Enter your name"

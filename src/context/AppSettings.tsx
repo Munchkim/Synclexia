@@ -1,4 +1,5 @@
-import React, { createContext, useContext, useState, ReactNode } from 'react';
+// src/context/AppSettings.tsx
+import React, { createContext, useContext, useMemo, useState, ReactNode, useCallback } from 'react';
 
 type FontSize = 'small' | 'medium' | 'large';
 
@@ -14,7 +15,7 @@ interface SettingsContextProps {
 
 const defaultSettings: SettingsContextProps = {
   fontSize: 'medium',
-  fontFamily: 'Arial',
+  fontFamily: 'Open Dyslexic',
   bgColor: '#fff9c4',
   accentColor: '#fde695',
   setFontSize: () => {},
@@ -26,22 +27,21 @@ const AppSettingsContext = createContext<SettingsContextProps>(defaultSettings);
 
 export const AppSettingsProvider = ({ children }: { children: ReactNode }) => {
   const [fontSize, setFontSize] = useState<FontSize>('medium');
-  const [fontFamily, setFontFamily] = useState('Arial');
+  const [fontFamily, setFontFamily] = useState('Open Dyslexic');
   const [bgColor, setBgColor] = useState('#fff9c4');
   const [accentColor, setAccentColor] = useState('#fde695');
 
-  const setColors = (bg: string, accent: string) => {
+  const setColors = useCallback((bg: string, accent: string) => {
     setBgColor(bg);
     setAccentColor(accent);
-  };
+  }, []);
 
-  return (
-    <AppSettingsContext.Provider
-      value={{ fontSize, fontFamily, bgColor, accentColor, setFontSize, setFontFamily, setColors }}
-    >
-      {children}
-    </AppSettingsContext.Provider>
+  const value = useMemo(
+    () => ({ fontSize, fontFamily, bgColor, accentColor, setFontSize, setFontFamily, setColors }),
+    [fontSize, fontFamily, bgColor, accentColor, setColors]
   );
+
+  return <AppSettingsContext.Provider value={value}>{children}</AppSettingsContext.Provider>;
 };
 
 export const useAppSettings = () => useContext(AppSettingsContext);
