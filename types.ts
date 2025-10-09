@@ -28,6 +28,4 @@ export type RootStackParamList = {
   AdminAccounts: undefined;
   PhonicsCategory: { category: string };
   PhonicsLessonScreen: { phoneme: string };
-
-
 };

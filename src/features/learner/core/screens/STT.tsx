@@ -8,7 +8,7 @@ import BaseScreen from '../../../../components/BaseScreen';
 
 import Constants from 'expo-constants';
 
-const ASSEMBLY_API_KEY = Constants.expoConfig?.extra?.ASSEMBLY_API_KEY;
+const ASSEMBLY_API_KEY = process.env.EXPO_PUBLIC_ASSEMBLY_API_KEY;
 
 export default function STTScreen() {
   const { accentColor, fontFamily, fontSize } = useAppSettings();
@@ -35,69 +35,94 @@ export default function STTScreen() {
     };
   }, []);
 
-  const transcribeAudio = async (fileUri: string) => {
-    try {
-      setStatusMessage('📤 Uploading audio...');
-      const uploadRes = await FileSystem.uploadAsync(
-        'https://api.assemblyai.com/v2/upload',
-        fileUri,
-        {
-          uploadType:
-            (FileSystem as any).FileSystemUploadType?.BINARY_CONTENT ??
-            (0 as any),
-          headers: {
-            authorization: ASSEMBLY_API_KEY,
-            'Content-Type': 'application/octet-stream',
-          },
-        }
-      );
-
-      const { upload_url } = JSON.parse(uploadRes.body);
-      setStatusMessage('🧠 Processing transcription...');
-
-      const transcriptRes = await fetch('https://api.assemblyai.com/v2/transcript', {
-        method: 'POST',
-        headers: {
-          authorization: ASSEMBLY_API_KEY,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ audio_url: upload_url }),
-      });
-
-      const { id: transcriptId } = await transcriptRes.json();
-
-      let status = 'processing';
-      let pollingResult = null;
-
-      while (status === 'processing') {
-        const pollingRes = await fetch(`https://api.assemblyai.com/v2/transcript/${transcriptId}`, {
-          headers: { authorization: ASSEMBLY_API_KEY },
-        });
-
-        pollingResult = await pollingRes.json();
-        status = pollingResult.status;
-        await new Promise((res) => setTimeout(res, 3000));
-      }
-
-      if (status === 'completed') {
-        const finalText = pollingResult.text?.trim();
-        if (finalText?.length > 0) {
-          setTranscript(finalText);
-          setStatusMessage('✅ Transcription complete.');
-        } else {
-          setTranscript('');
-          setStatusMessage('⚠️ No text detected in audio.');
-        }
-      } else {
-        setTranscript('');
-        setStatusMessage(`❌ Transcription failed: ${pollingResult.error || 'Unknown error'}`);
-      }
-    } catch (error) {
-      console.error(error);
-      Alert.alert('Error', 'Transcription failed.');
-      setStatusMessage('❌ Something went wrong during transcription.');
+const transcribeAudio = async (fileUri: string) => {
+  try {
+    if (!ASSEMBLY_API_KEY) {
+      Alert.alert('Config error', 'Missing ASSEMBLY_API_KEY in app config.');
+      return;
     }
-  };
+
+    setStatusMessage('📤 Uploading audio...');
+
+    // 1) Read the local file as a Blob
+    const localResp = await fetch(fileUri);
+    const blob = await localResp.blob();
+
+    // 2) Upload to AssemblyAI /upload
+    const uploadResp = await fetch('https://api.assemblyai.com/v2/upload', {
+      method: 'POST',
+      headers: {
+        authorization: ASSEMBLY_API_KEY,
+        'Content-Type': 'application/octet-stream',
+      },
+      body: blob,
+    });
+
+    if (!uploadResp.ok) {
+      const errText = await uploadResp.text().catch(() => '');
+      throw new Error(`Upload failed: ${uploadResp.status} ${errText}`);
+    }
+
+    const { upload_url } = await uploadResp.json();
+
+    // 3) Create transcript
+    setStatusMessage('🧠 Processing transcription...');
+    const createResp = await fetch('https://api.assemblyai.com/v2/transcript', {
+      method: 'POST',
+      headers: {
+        authorization: ASSEMBLY_API_KEY,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ audio_url: upload_url }),
+    });
+
+    if (!createResp.ok) {
+      const errText = await createResp.text().catch(() => '');
+      throw new Error(`Create transcript failed: ${createResp.status} ${errText}`);
+    }
+
+    const { id: transcriptId } = await createResp.json();
+
+    // 4) Poll transcript
+    const start = Date.now();
+    const TIMEOUT_MS = 2 * 60 * 1000; // 2 minutes
+
+    while (true) {
+      const pollResp = await fetch(`https://api.assemblyai.com/v2/transcript/${transcriptId}`, {
+        headers: { authorization: ASSEMBLY_API_KEY },
+      });
+      const result = await pollResp.json();
+
+      if (result.status === 'completed') {
+        const finalText = String(result.text || '').trim();
+        setTranscript(finalText || '');
+        setStatusMessage(finalText ? '✅ Transcription complete.' : '⚠️ No text detected in audio.');
+        break;
+      }
+
+      if (result.status === 'error') {
+        setTranscript('');
+        setStatusMessage(`❌ Transcription failed: ${result.error || 'Unknown error'}`);
+        break;
+      }
+
+      // statuses can be "queued" or "processing"
+      setStatusMessage(result.status === 'queued' ? '⏳ Queued…' : '⚙️ Processing…');
+
+      if (Date.now() - start > TIMEOUT_MS) {
+        setStatusMessage('⏲️ Timed out while waiting for transcription.');
+        break;
+      }
+
+      await new Promise((res) => setTimeout(res, 2500));
+    }
+  } catch (error: any) {
+    console.error(error);
+    Alert.alert('Error', 'Transcription failed.');
+    setStatusMessage(`❌ Something went wrong during transcription.`);
+  }
+};
+
 
   const uploadAudioFile = async () => {
     try {
