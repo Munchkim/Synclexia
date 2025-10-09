@@ -1,21 +1,18 @@
-//screens/admin/Notifications.tsx
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import {
-  View,
-  Text,
-  StyleSheet,
-  FlatList,
-  TouchableOpacity,
-  RefreshControl,
-  Alert,
+  View, Text, StyleSheet, FlatList, TouchableOpacity, RefreshControl, Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import tinycolor from 'tinycolor2';
+import { useNavigation } from '@react-navigation/native';
 
 import BaseScreen from '../../../components/BaseScreen';
-import { useAppSettings } from '../../../../src/context/AppSettings';
-import { supabase } from '../../../../src/lib/supabaseClient';
+import { useAppSettings } from '../../../context/AppSettings';
+import { supabase } from '../../../lib/supabaseClient';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import type { RootStackParamList } from '../../../../types';
 
+type Nav = NativeStackNavigationProp<RootStackParamList, 'AdminNotificationsScreen'>;
 const AUDIENCE = 'admin' as const;
 
 type NotificationRow = {
@@ -24,25 +21,15 @@ type NotificationRow = {
   message: string;
   read: boolean | null;
   created_at: string | null;
-  type: string | null;  
-  target: string | null;
+  type: 'feedback' | 'system' | 'progress' | string | null;
+  target: string | null; // e.g. "feedback:123", "user:abcd", "lesson:xyz"
   audience: 'admin' | 'learner' | null;
 };
 
 type FilterTab = 'all' | 'unread';
 
-export async function fetchAdminUnreadCount(): Promise<number> {
-  const { count, error } = await supabase
-    .from('notifications')
-    .select('id', { count: 'exact', head: true })
-    .eq('audience', AUDIENCE)
-    .eq('read', false);
-
-  if (error || count == null) return 0;
-  return count;
-}
-
 export default function AdminNotificationsScreen() {
+  const nav = useNavigation<Nav>();
   const { bgColor, accentColor, fontFamily, fontSize } = useAppSettings();
   const fontSizeValue = fontSize === 'small' ? 14 : fontSize === 'large' ? 20 : 16;
 
@@ -62,10 +49,9 @@ export default function AdminNotificationsScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [filter, setFilter] = useState<FilterTab>('all');
-
   const fetchingRef = useRef(false);
 
-  const fetchRows = async () => {
+  const fetchRows = useCallback(async () => {
     if (fetchingRef.current) return;
     fetchingRef.current = true;
     try {
@@ -74,12 +60,10 @@ export default function AdminNotificationsScreen() {
       let query = supabase
         .from('notifications')
         .select('*')
-        .eq('audience', AUDIENCE)        
+        .eq('audience', AUDIENCE)
         .order('created_at', { ascending: false });
 
-      if (filter === 'unread') {
-        query = query.eq('read', false);
-      }
+      if (filter === 'unread') query = query.eq('read', false);
 
       const { data, error } = await query;
       if (error) {
@@ -87,13 +71,13 @@ export default function AdminNotificationsScreen() {
         Alert.alert('Error', 'Failed to load notifications.');
         return;
       }
-      setRows((data || []) as NotificationRow[]);
+      setRows(((data || []) as NotificationRow[]).map(r => ({ ...r })));
     } finally {
       setLoading(false);
       setRefreshing(false);
       fetchingRef.current = false;
     }
-  };
+  }, [filter, refreshing]);
 
   useEffect(() => {
     const channel = supabase
@@ -106,10 +90,11 @@ export default function AdminNotificationsScreen() {
       .subscribe();
 
     fetchRows();
+
     return () => {
-      supabase.removeChannel(channel);
+      try { supabase.removeChannel(channel); } catch {}
     };
-  }, [filter]);
+  }, [fetchRows]);
 
   const onRefresh = () => {
     setRefreshing(true);
@@ -147,23 +132,30 @@ export default function AdminNotificationsScreen() {
     }
   };
 
+  // Simple deep-linking by kind
   const handleOpenTarget = (row: NotificationRow) => {
     if (!row.target) return;
-    const [kind, value] = row.target.split(':');
-    if (!kind || !value) return;
-
-
-    switch (kind) {
+    const [kind /*, value*/] = row.target.split(':'); // values available if you add param routes later
+    switch ((kind || '').toLowerCase()) {
       case 'feedback':
+        nav.navigate('AdminFeedback');
         break;
       case 'user':
+        nav.navigate('AdminAccounts');
         break;
       case 'lesson':
+        nav.navigate('AdminPhonicsLesson');
         break;
       default:
         break;
     }
   };
+
+  const iconForType = (t: NotificationRow['type']) =>
+    t === 'feedback' ? 'chatbubble-ellipses'
+      : t === 'system' ? 'notifications'
+      : t === 'progress' ? 'stats-chart'
+      : 'alert-circle';
 
   const renderItem = ({ item }: { item: NotificationRow }) => {
     const isUnread = item.read !== true;
@@ -183,19 +175,7 @@ export default function AdminNotificationsScreen() {
               { borderColor: borderSoft, backgroundColor: isUnread ? accentColor : '#fff' },
             ]}
           >
-            <Ionicons
-              name={
-                item.type === 'feedback'
-                  ? 'chatbubble-ellipses'
-                  : item.type === 'system'
-                  ? 'notifications'
-                  : item.type === 'progress'
-                  ? 'stats-chart'
-                  : 'alert-circle'
-              }
-              size={18}
-              color={isUnread ? '#fff' : textMuted}
-            />
+            <Ionicons name={iconForType(item.type)} size={18} color={isUnread ? '#fff' : textMuted} />
           </View>
         </View>
 
@@ -212,14 +192,12 @@ export default function AdminNotificationsScreen() {
 
         <View style={styles.cardRight}>
           <TouchableOpacity
-            onPress={() => markReadToggle(item.id, !item.read)}
+            onPress={() => markReadToggle(item.id, !(item.read === true))}
             style={[
               styles.readPill,
               {
                 borderColor: borderSoft,
-                backgroundColor: isUnread
-                  ? '#fff'
-                  : tinycolor(accentColor).setAlpha(0.1).toRgbString(),
+                backgroundColor: isUnread ? '#fff' : tinycolor(accentColor).setAlpha(0.1).toRgbString(),
               },
             ]}
           >
@@ -236,19 +214,13 @@ export default function AdminNotificationsScreen() {
         <View style={styles.tabs}>
           <TouchableOpacity
             onPress={() => setFilter('all')}
-            style={[
-              styles.tabBtn,
-              filter === 'all' && { backgroundColor: '#fff', borderColor: borderSoft },
-            ]}
+            style={[styles.tabBtn, filter === 'all' && { backgroundColor: '#fff', borderColor: borderSoft }]}
           >
             <Text style={[styles.tabText, { fontFamily, color: textDark }]}>All</Text>
           </TouchableOpacity>
           <TouchableOpacity
             onPress={() => setFilter('unread')}
-            style={[
-              styles.tabBtn,
-              filter === 'unread' && { backgroundColor: '#fff', borderColor: borderSoft },
-            ]}
+            style={[styles.tabBtn, filter === 'unread' && { backgroundColor: '#fff', borderColor: borderSoft }]}
           >
             <Text style={[styles.tabText, { fontFamily, color: textDark }]}>Unread</Text>
           </TouchableOpacity>
@@ -282,40 +254,25 @@ export default function AdminNotificationsScreen() {
 
 const styles = StyleSheet.create({
   toolbar: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    borderBottomWidth: 1,
-    paddingBottom: 8,
-    marginBottom: 10,
-    paddingHorizontal: 4,
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    borderBottomWidth: 1, paddingBottom: 8, marginBottom: 10, paddingHorizontal: 4,
   },
   tabs: { flexDirection: 'row', gap: 8 },
   tabBtn: { paddingVertical: 6, paddingHorizontal: 14, borderRadius: 16, borderWidth: 1 },
   tabText: { fontWeight: '600' },
   markAllBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    borderWidth: 1,
-    borderRadius: 16,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
+    flexDirection: 'row', alignItems: 'center', gap: 6, borderWidth: 1,
+    borderRadius: 16, paddingHorizontal: 10, paddingVertical: 6,
   },
   markAllText: { fontWeight: '600' },
   list: { paddingVertical: 4 },
   sep: { height: 1, marginHorizontal: 8 },
   card: {
-    flexDirection: 'row', alignItems: 'center',
-    paddingVertical: 12, paddingHorizontal: 10,
-    borderRadius: 12, borderWidth: 1,
-    marginHorizontal: 4, marginVertical: 6,
+    flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 10,
+    borderRadius: 12, borderWidth: 1, marginHorizontal: 4, marginVertical: 6,
   },
   cardLeft: { marginRight: 10 },
-  badge: {
-    width: 34, height: 34, borderRadius: 17,
-    justifyContent: 'center', alignItems: 'center', borderWidth: 1,
-  },
+  badge: { width: 34, height: 34, borderRadius: 17, justifyContent: 'center', alignItems: 'center', borderWidth: 1 },
   cardMid: { flex: 1 },
   message: { fontWeight: '600' },
   when: { marginTop: 2, fontSize: 12 },

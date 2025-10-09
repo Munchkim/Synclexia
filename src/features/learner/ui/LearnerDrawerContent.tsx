@@ -32,23 +32,35 @@ const CustomDrawer: React.FC<DrawerContentComponentProps> = (props) => {
   const [showBgColor, setShowBgColor] = useState(false);
 
   const loadUser = useCallback(async () => {
-    const { data } = await supabase.auth.getUser();
-    const u = data?.user;
-    if (!u) return;
-    // Prefer username from users table, fallback to auth metadata
-    let uname = (u.user_metadata as any)?.username || '';
     try {
-      const { data: row } = await supabase
-        .from('users')
-        .select('username')
-        .eq('id', u.id)
-        .single();
-      if (row?.username) uname = row.username;
-    } catch {}
-    setDrawerUser({ name: uname || 'User', email: u.email || '' });
+      const { data } = await supabase.auth.getUser();
+      const u = data?.user;
+      if (!u) return;
+
+      // Prefer username from users table, fallback to auth metadata
+      let uname = '';
+      try {
+        const { data: row } = await supabase
+          .from('users')
+          .select('username')
+          .eq('id', u.id)
+          .single();
+        if (row?.username) uname = row.username;
+      } catch {}
+      if (!uname) uname = (u.user_metadata as any)?.username || '';
+
+      setDrawerUser({ name: uname || 'User', email: u.email || '' });
+    } catch (e) {
+      console.log('[LearnerDrawer] loadUser error', e);
+    }
   }, []);
 
   useEffect(() => { loadUser(); }, [loadUser]);
+
+  const onChangeFontSize = (val: number) => {
+    const sizes = ['small', 'medium', 'large'] as const;
+    setFontSize(sizes[Math.max(0, Math.min(2, val))]);
+  };
 
   return (
     <DrawerContentScrollView {...props} contentContainerStyle={[styles.container, { backgroundColor: bgColor }]}>
@@ -108,8 +120,9 @@ const CustomDrawer: React.FC<DrawerContentComponentProps> = (props) => {
               text: 'Logout',
               style: 'destructive',
               onPress: async () => {
-                await supabase.auth.signOut();
-                props.navigation.reset({ index: 0, routes: [{ name: 'Login' }] });
+                try { await supabase.auth.signOut(); } finally {
+                  props.navigation.reset({ index: 0, routes: [{ name: 'Login' }] });
+                }
               },
             },
           ])
@@ -122,7 +135,7 @@ const CustomDrawer: React.FC<DrawerContentComponentProps> = (props) => {
       </TouchableOpacity>
 
       {/* Font Size Modal */}
-      <Modal visible={showFontSize} transparent animationType="fade">
+      <Modal visible={showFontSize} transparent animationType="fade" onRequestClose={() => setShowFontSize(false)}>
         <View style={styles.centeredModal}>
           <View style={[styles.modalWide, { backgroundColor: bgColor }]}>
             <Text style={[styles.modalTitle, { fontFamily, fontSize: fontSizeValue + 2 }]}>Font Size</Text>
@@ -135,10 +148,7 @@ const CustomDrawer: React.FC<DrawerContentComponentProps> = (props) => {
                 maximumValue={2}
                 step={1}
                 value={fontSize === 'small' ? 0 : fontSize === 'large' ? 2 : 1}
-                onValueChange={(val) => {
-                  const sizes = ['small', 'medium', 'large'] as const;
-                  setFontSize(sizes[val]);
-                }}
+                onValueChange={onChangeFontSize}
                 minimumTrackTintColor="#333"
                 maximumTrackTintColor="#999"
                 thumbTintColor="#333"
@@ -158,11 +168,15 @@ const CustomDrawer: React.FC<DrawerContentComponentProps> = (props) => {
       </Modal>
 
       {/* Font Style Modal */}
-      <Modal visible={showFontStyle} transparent animationType="fade">
+      <Modal visible={showFontStyle} transparent animationType="fade" onRequestClose={() => setShowFontStyle(false)}>
         <View style={[styles.modal, { backgroundColor: bgColor }]}>
           <Text style={[styles.modalTitle, { fontFamily, fontSize: fontSizeValue + 2 }]}>Font Style</Text>
           {fontOptions.map((font) => (
-            <TouchableOpacity key={font} style={styles.option} onPress={() => { setFontFamily(font); setShowFontStyle(false); }}>
+            <TouchableOpacity
+              key={font}
+              style={styles.option}
+              onPress={() => { setFontFamily(font); setShowFontStyle(false); }}
+            >
               <Text style={{ fontFamily: font, fontSize: fontSizeValue }}>{font}</Text>
             </TouchableOpacity>
           ))}
@@ -170,14 +184,17 @@ const CustomDrawer: React.FC<DrawerContentComponentProps> = (props) => {
       </Modal>
 
       {/* Background Color Modal */}
-      <Modal visible={showBgColor} transparent animationType="fade">
+      <Modal visible={showBgColor} transparent animationType="fade" onRequestClose={() => setShowBgColor(false)}>
         <View style={[styles.modal, { backgroundColor: bgColor }]}>
           <Text style={[styles.modalTitle, { fontFamily, fontSize: fontSizeValue + 2 }]}>Background Color</Text>
           <View style={styles.colorGridContainer}>
             {colorPairs.map(({ bg, accent }, index) => (
               <TouchableOpacity
                 key={index}
-                style={[styles.colorSwatch, { backgroundColor: bg, borderColor: bgColor === bg ? '#000' : bg }]}
+                style={[
+                  styles.colorSwatch,
+                  { backgroundColor: bg, borderColor: bgColor === bg ? '#000' : bg },
+                ]}
                 onPress={() => { setColors(bg, accent); setShowBgColor(false); }}
               >
                 <View style={[styles.accentBox, { backgroundColor: accent }]} />

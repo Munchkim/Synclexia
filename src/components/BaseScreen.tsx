@@ -8,17 +8,14 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
-import { useAppSettings } from '../../src/context/AppSettings'; // fixed path
+import { useAppSettings } from '../../src/context/AppSettings';
 
 type BaseScreenProps = {
   children: React.ReactNode;
   title: string;
   showBack?: boolean;
-  /** optional right-side header content (e.g., gear icon) */
   right?: React.ReactNode;
-  /** set true to wrap content in a ScrollView */
   scroll?: boolean;
-  /** extra styles for the content container */
   contentStyle?: object;
 };
 

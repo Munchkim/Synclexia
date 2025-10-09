@@ -18,7 +18,6 @@ export async function fetchLearnerUnreadCount(userId: string): Promise<number> {
     .eq('audience', 'learner')
     .eq('user_id', userId)
     .eq('read', false);
-
   if (error || count == null) return 0;
   return count;
 }

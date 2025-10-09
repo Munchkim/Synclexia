@@ -4,6 +4,7 @@ import { DrawerContentScrollView, DrawerContentComponentProps } from '@react-nav
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { supabase } from '../../../lib/supabaseClient';
+import { useAppSettings } from '../../../context/AppSettings';
 
 function initialsFrom(name?: string | null, email?: string | null) {
   const src = (name || email || '').trim();
@@ -13,27 +14,35 @@ function initialsFrom(name?: string | null, email?: string | null) {
   return src.slice(0, 2).toUpperCase();
 }
 
+const AVATAR_SIZE = 44;
+
 const AdminCustomDrawer: React.FC<DrawerContentComponentProps> = (props) => {
+  const { bgColor, fontFamily } = useAppSettings();
+
   const [displayName, setDisplayName] = useState<string>('Loading…');
   const [email, setEmail] = useState<string>('');
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
 
   const loadUser = useCallback(async () => {
-    const { data } = await supabase.auth.getUser();
-    const u = data?.user;
-    if (!u) return;
-    const meta = (u.user_metadata as any) || {};
-    const uname = meta.username;
-    const avatar = meta.avatar_url || null;
+    try {
+      const { data } = await supabase.auth.getUser();
+      const u = data?.user;
+      if (!u) return;
 
-    setDisplayName(uname || u.email || '');
-    setEmail(u.email || '');
-    setAvatarUrl(avatar);
+      const meta = (u.user_metadata as Record<string, any>) || {};
+      const uname = meta.username as string | undefined;
+      const avatar = (meta.avatar_url as string | undefined) || null;
+
+      setDisplayName(uname || u.email || '');
+      setEmail(u.email || '');
+      setAvatarUrl(avatar);
+    } catch (e) {
+      // non-fatal; keep previous state
+      console.log('[AdminDrawer] loadUser error', e);
+    }
   }, []);
 
   useEffect(() => { loadUser(); }, [loadUser]);
-
-  // refresh when drawer gains focus (e.g., after saving profile)
   useFocusEffect(useCallback(() => { loadUser(); }, [loadUser]));
 
   const handleLogout = () => {
@@ -43,18 +52,20 @@ const AdminCustomDrawer: React.FC<DrawerContentComponentProps> = (props) => {
         text: 'Logout',
         style: 'destructive',
         onPress: async () => {
-          await supabase.auth.signOut();
-          props.navigation.reset({ index: 0, routes: [{ name: 'Login' }] });
+          try { await supabase.auth.signOut(); } finally {
+            props.navigation.reset({ index: 0, routes: [{ name: 'Login' }] });
+          }
         },
       },
     ]);
   };
 
-  // tiny cache-buster so a newly uploaded avatar shows immediately
-  const avatarSrc = avatarUrl ? { uri: avatarUrl + (avatarUrl.includes('?') ? '&' : '?') + 't=' + Date.now() } : null;
+  const avatarSrc = avatarUrl
+    ? { uri: avatarUrl + (avatarUrl.includes('?') ? '&' : '?') + 't=' + Date.now() }
+    : null;
 
   return (
-    <DrawerContentScrollView {...props} contentContainerStyle={styles.container}>
+    <DrawerContentScrollView {...props} contentContainerStyle={[styles.container, { backgroundColor: bgColor }]}>
       {/* Header */}
       <TouchableOpacity
         style={styles.profile}
@@ -67,43 +78,41 @@ const AdminCustomDrawer: React.FC<DrawerContentComponentProps> = (props) => {
           <Image source={avatarSrc} style={styles.avatarImg} />
         ) : (
           <View style={styles.avatarFallback}>
-            <Text style={styles.avatarTxt}>{initialsFrom(displayName, email)}</Text>
+            <Text style={[styles.avatarTxt, { fontFamily }]}>{initialsFrom(displayName, email)}</Text>
           </View>
         )}
         <View style={{ marginLeft: 12 }}>
-          <Text style={styles.name}>{displayName}</Text>
-          {!!email && <Text style={styles.email}>{email}</Text>}
+          <Text style={[styles.name, { fontFamily }]}>{displayName}</Text>
+          {!!email && <Text style={[styles.email, { fontFamily }]}>{email}</Text>}
         </View>
       </TouchableOpacity>
 
       {/* Items */}
       <TouchableOpacity style={styles.row} onPress={() => props.navigation.navigate('AdminHelpEditor')}>
         <View style={styles.iconWrapper}><Ionicons name="help-circle-outline" size={22} color="#333" /></View>
-        <Text style={styles.item}>Help</Text>
+        <Text style={[styles.item, { fontFamily }]}>Help</Text>
       </TouchableOpacity>
 
       <TouchableOpacity style={styles.row} onPress={() => props.navigation.navigate('AdminAboutEditor')}>
         <View style={styles.iconWrapper}><Ionicons name="information-circle-outline" size={22} color="#333" /></View>
-        <Text style={styles.item}>About Us</Text>
+        <Text style={[styles.item, { fontFamily }]}>About Us</Text>
       </TouchableOpacity>
 
       <TouchableOpacity style={styles.row} onPress={() => props.navigation.navigate('AdminFeedback')}>
         <View style={styles.iconWrapper}><Ionicons name="chatbubble-ellipses-outline" size={22} color="#333" /></View>
-        <Text style={styles.item}>Feedback</Text>
+        <Text style={[styles.item, { fontFamily }]}>Feedback</Text>
       </TouchableOpacity>
 
       <TouchableOpacity style={styles.row} onPress={handleLogout}>
         <View style={styles.iconWrapper}><Ionicons name="log-out-outline" size={22} color="#333" /></View>
-        <Text style={[styles.item, { fontWeight: 'bold' }]}>Logout</Text>
+        <Text style={[styles.item, { fontFamily, fontWeight: 'bold' }]}>Logout</Text>
       </TouchableOpacity>
     </DrawerContentScrollView>
   );
 };
 
-const AVATAR_SIZE = 44;
-
 const styles = StyleSheet.create({
-  container: { paddingVertical: 30, paddingHorizontal: 20, flexGrow: 1, backgroundColor: '#fff9c4' },
+  container: { paddingVertical: 30, paddingHorizontal: 20, flexGrow: 1 },
   profile: { flexDirection: 'row', alignItems: 'center', marginBottom: 24, paddingLeft: 4 },
   avatarImg: { width: AVATAR_SIZE, height: AVATAR_SIZE, borderRadius: AVATAR_SIZE / 2, backgroundColor: '#ffe085' },
   avatarFallback: { width: AVATAR_SIZE, height: AVATAR_SIZE, borderRadius: AVATAR_SIZE / 2, backgroundColor: '#ffe085', alignItems: 'center', justifyContent: 'center' },
