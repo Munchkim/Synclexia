@@ -269,8 +269,6 @@ export default function GroupLesson() {
         if (!lesson) { setRecapKeys([]); return; }
 
         if (curKey === 'S') { setRecapKeys([]); return; }
-        if (curKey === 'A') { setRecapKeys(['A']); return; }
-        if (curKey === 'T') { setRecapKeys(['S', 'A']); return; }
 
         const currentOrder = (lesson as any)?.order_index;
         if (currentOrder == null) { setRecapKeys([]); return; }
