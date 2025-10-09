@@ -1,16 +1,20 @@
+// storage/upload.ts
 import * as LegacyFS from 'expo-file-system/legacy';
 import { supabase } from '../supabaseClient';
 
+/** ext → content-type */
 function guessContentType(path: string, fallback = 'application/octet-stream') {
   const ext = (path.split('.').pop() || '').toLowerCase();
   const map: Record<string, string> = {
     jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml',
     mp4: 'video/mp4', mov: 'video/quicktime', m4v: 'video/x-m4v', webm: 'video/webm',
     mp3: 'audio/mpeg', wav: 'audio/wav', m4a: 'audio/mp4', aac: 'audio/aac', ogg: 'audio/ogg',
+    txt: 'text/plain', json: 'application/json',
   };
   return map[ext] || fallback;
 }
 
+/** Base64 → Uint8Array (RN-safe, no atob) */
 function base64ToUint8(base64: string) {
   const clean = base64.replace(/[\r\n\s]/g, '');
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=';
@@ -38,18 +42,19 @@ function publicUrl(bucket: string, path: string) {
   return data.publicUrl;
 }
 
+/** Upload a local file (PUBLIC bucket) and return its public URL */
 export async function uploadPublicFile(
   bucket: string,
   path: string,
   localUri: string,
   contentType?: string
 ): Promise<string> {
-  const base64 = await LegacyFS.readAsStringAsync(localUri, { encoding: LegacyFS.EncodingType.Base64 });
+  // 👇 use LEGACY FS with 'base64' encoding to avoid SDK 54 deprecation
+  const base64 = await LegacyFS.readAsStringAsync(localUri, { encoding: 'base64' as any });
   const bytes = base64ToUint8(base64);
-
   const ct = contentType || guessContentType(path);
 
-  const { error } = await supabase.storage.from(bucket).upload(path, bytes, {
+  const { error } = await supabase.storage.from(bucket).upload(path, bytes.buffer, {
     upsert: true,
     contentType: ct,
     cacheControl: '3600',
@@ -65,21 +70,18 @@ export async function uploadStringAsFile(
   text: string,
   contentType = 'text/plain'
 ): Promise<string> {
-  function strToUint8(s: string) {
-    const utf8 = unescape(encodeURIComponent(s));
-    const arr = new Uint8Array(utf8.length);
-    for (let i = 0; i < utf8.length; i++) arr[i] = utf8.charCodeAt(i);
-    return arr;
-  }
-
-  const bytes = strToUint8(text);
-
-  const { error } = await supabase.storage.from(bucket).upload(path, bytes, {
+  const buf = new TextEncoder().encode(text).buffer;
+  const { error } = await supabase.storage.from(bucket).upload(path, buf, {
     upsert: true,
     contentType,
     cacheControl: '3600',
   });
   if (error) throw error;
-
   return publicUrl(bucket, path);
+}
+
+export async function getSignedUrl(bucket: string, path: string, expiresIn = 3600) {
+  const { data, error } = await supabase.storage.from(bucket).createSignedUrl(path, expiresIn);
+  if (error) throw error;
+  return data.signedUrl;
 }

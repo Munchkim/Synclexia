@@ -3,9 +3,14 @@ import { createDrawerNavigator } from '@react-navigation/drawer';
 import DashboardScreen from '../../features/learner/main/screens/Dashboard';
 import CustomDrawer from '../../features/learner/ui/LearnerDrawerContent';
 
-const Drawer = createDrawerNavigator();
+// Drawer routes are local to this navigator (separate from RootStackParamList)
+export type LearnerDrawerParamList = {
+  DashboardScreen: undefined;
+};
 
-const DrawerNavigator = () => {
+const Drawer = createDrawerNavigator<LearnerDrawerParamList>();
+
+const LearnerDrawerNavigator = () => {
   return (
     <Drawer.Navigator
       drawerContent={(props) => <CustomDrawer {...props} />}
@@ -23,4 +28,4 @@ const DrawerNavigator = () => {
   );
 };
 
-export default DrawerNavigator;
+export default LearnerDrawerNavigator;

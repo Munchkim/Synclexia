@@ -3,7 +3,12 @@ import { createDrawerNavigator } from '@react-navigation/drawer';
 import AdminDashboardScreen from '../../features/admin/screens/Dashboard';
 import AdminCustomDrawer from '../../features/admin/ui/AdminDrawerContent';
 
-const Drawer = createDrawerNavigator();
+// Drawer routes are local to this navigator (separate from RootStackParamList)
+export type AdminDrawerParamList = {
+  AdminHome: undefined;
+};
+
+const Drawer = createDrawerNavigator<AdminDrawerParamList>();
 
 const AdminDrawerNavigator = () => {
   return (

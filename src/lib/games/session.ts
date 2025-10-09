@@ -1,12 +1,22 @@
+// games/session.ts (or similar)
 import { supabase } from '../supabaseClient';
 
 export type GameKind = 'NAME_PICTURE' | 'SOUND_MATCH' | 'RHYME_TIME' | 'FILL_BLANK';
 
-export async function createGameSession(kind: GameKind, totalRounds = 20, itemsPerRound = 5) {
+type CreateSessionResult =
+  | { ok: true; id: string }
+  | { ok: false; error: string };
+
+export async function createGameSession(
+  kind: GameKind,
+  totalRounds = 20,
+  itemsPerRound = 5
+): Promise<CreateSessionResult> {
   try {
-    const { data: u } = await supabase.auth.getUser();
+    const { data: u, error: authErr } = await supabase.auth.getUser();
+    if (authErr) return { ok: false, error: authErr.message };
     const user = u?.user;
-    if (!user) return null;
+    if (!user) return { ok: false, error: 'Not authenticated' };
 
     const { data, error } = await supabase
       .from('game_sessions')
@@ -21,19 +31,43 @@ export async function createGameSession(kind: GameKind, totalRounds = 20, itemsP
       .select('id')
       .single();
 
-    if (error) return null;
-    return data?.id as string;
-  } catch { return null; }
+    if (error || !data?.id) {
+      return { ok: false, error: error?.message || 'Failed to create session' };
+    }
+    return { ok: true, id: data.id as string };
+  } catch (e: any) {
+    return { ok: false, error: e?.message || 'Unexpected error' };
+  }
 }
+
+export type RoundItem = {
+  item_id?: string | null;
+  payload: any; // jsonb on DB
+  correctIndex: number;
+  selectedIndex: number | null;
+};
+
+type SaveRoundResult = { ok: true; roundScore: number } | { ok: false; error: string };
 
 export async function saveRoundResults(opts: {
   sessionId: string | null;
   roundIndex: number;
-  items: Array<{ item_id?: string | null; payload: any; correctIndex: number; selectedIndex: number | null }>;
-}) {
-  if (!opts.sessionId) return;
-  const roundScore = opts.items.reduce((s, it) => s + (it.selectedIndex === it.correctIndex ? 1 : 0), 0);
+  items: RoundItem[];
+}): Promise<SaveRoundResult> {
   try {
+    if (!opts.sessionId) return { ok: false, error: 'Missing sessionId' };
+    if (!Number.isFinite(opts.roundIndex) || opts.roundIndex < 0) {
+      return { ok: false, error: 'Invalid roundIndex' };
+    }
+    if (!Array.isArray(opts.items) || opts.items.length === 0) {
+      return { ok: false, error: 'No items to save' };
+    }
+
+    const roundScore = opts.items.reduce(
+      (s, it) => s + (it.selectedIndex === it.correctIndex ? 1 : 0),
+      0
+    );
+
     const rows = opts.items.map((it, i) => ({
       session_id: opts.sessionId,
       round_index: opts.roundIndex,
@@ -44,10 +78,18 @@ export async function saveRoundResults(opts: {
       is_correct: it.selectedIndex === it.correctIndex,
       payload: it.payload
     }));
-    await supabase.from('game_attempts').insert(rows);
 
-    await supabase.rpc('increment_game_score', { p_session_id: opts.sessionId, p_delta: roundScore });
-  } catch (e) {
-    console.warn('saveRoundResults', e);
+    const { error: insertErr } = await supabase.from('game_attempts').insert(rows);
+    if (insertErr) return { ok: false, error: insertErr.message };
+
+    const { error: rpcErr } = await supabase.rpc('increment_game_score', {
+      p_session_id: opts.sessionId,
+      p_delta: roundScore
+    });
+    if (rpcErr) return { ok: false, error: rpcErr.message };
+
+    return { ok: true, roundScore };
+  } catch (e: any) {
+    return { ok: false, error: e?.message || 'Unexpected error' };
   }
 }
