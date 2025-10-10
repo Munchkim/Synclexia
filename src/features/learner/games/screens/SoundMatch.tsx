@@ -5,23 +5,27 @@ import BaseScreen from '../../../../components/BaseScreen';
 import { supabase } from '../../../../lib/supabaseClient';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import { useAppSettings } from '../../../../context/AppSettings';
+import { deterministicPick, placeCorrect } from './deterministic';
 
-type Lesson = { id: string; label: string; audio_url: string | null; group_name: string | null };
+type Lesson = { id: string; label: string; audio_url: string; group_name: string | null };
 type Item = { audio: string; choices: string[]; correctIndex: number };
 
 const ITEMS_PER_ROUND = 5;
 const TOTAL_ROUNDS = 20;
 const GAME_KIND = 'SOUND_MATCH';
+const GAME_KEY  = 'sound_match' as const;
 
 export default function SoundMatchScreen() {
-  const route = useRoute<any>();
   const navigation = useNavigation<any>();
   const { accentColor, fontFamily } = useAppSettings();
+
+  const route = useRoute<any>();
   const phonicsLessonId: string | null = route?.params?.phonicsLessonId ?? null;
+  const passedSessionId: string | null = route?.params?.sessionId ?? null;
+  const passedRoundIndex: number | undefined = route?.params?.roundIndex;
 
   const [userId, setUserId] = useState<string | null>(null);
   const [pool, setPool] = useState<Lesson[]>([]);
-  const [used, setUsed] = useState<Set<string>>(new Set());
   const [sessionId, setSessionId] = useState<string | null>(null);
 
   const [roundIndex, setRoundIndex] = useState(1);
@@ -36,78 +40,111 @@ export default function SoundMatchScreen() {
   useEffect(() => {
     (async () => {
       setLoading(true);
+
       const { data: u } = await supabase.auth.getUser();
       const user = u?.user;
       if (!user) { Alert.alert('Login required'); setLoading(false); return; }
       setUserId(user.id);
 
-      const { data: existing } = await supabase
-        .from('game_sessions')
-        .select('id,current_round_index')
-        .eq('user_id', user.id).eq('kind', GAME_KIND)
-        .order('started_at', { ascending: false }).limit(1).maybeSingle();
+      // Use passed session when navigating from rounds hub; else reuse last or create.
+      let sid = passedSessionId ?? null;
+      if (!sid) {
+        const { data: existing } = await supabase
+          .from('game_sessions')
+          .select('id,current_round_index,current_item_index')
+          .eq('user_id', user.id).eq('kind', GAME_KIND)
+          .order('started_at', { ascending: false }).limit(1).maybeSingle();
 
-      if (existing?.id) {
-        setSessionId(existing.id);
-        setRoundIndex(existing.current_round_index ?? 1);
-      } else {
-        const { data: s, error: sErr } = await supabase.from('game_sessions').insert([{
-          user_id: user.id, kind: GAME_KIND, started_at: new Date().toISOString(),
-          total_rounds: TOTAL_ROUNDS, items_per_round: ITEMS_PER_ROUND,
-          score: 0, current_round_index: 1, current_item_index: 0, status: 'active'
-        }]).select('id').single();
-        if (sErr) { Alert.alert('Error', sErr.message); setLoading(false); return; }
-        setSessionId(s?.id ?? null);
+        if (existing?.id) {
+          sid = existing.id;
+          setRoundIndex(existing.current_round_index ?? 1);
+          setCursor(Math.min(existing.current_item_index ?? 0, ITEMS_PER_ROUND - 1));
+        } else {
+          const now = new Date().toISOString();
+          const { data: s, error: sErr } = await supabase.from('game_sessions').insert([{
+            user_id: user.id, kind: GAME_KIND, started_at: now,
+            total_rounds: TOTAL_ROUNDS, items_per_round: ITEMS_PER_ROUND,
+            score: 0, current_round_index: 1, current_item_index: 0, status: 'active'
+          }]).select('id,current_round_index,current_item_index').single();
+          if (sErr) { Alert.alert('Error', sErr.message); setLoading(false); return; }
+          sid = s?.id ?? null;
+          setRoundIndex(1);
+          setCursor(0);
+        }
+      }
+      setSessionId(sid);
+
+      // If a round is explicitly requested from the hub, switch to it (keep current_item_index).
+      if (passedRoundIndex && sid) {
+        await supabase.from('game_sessions')
+          .update({ current_round_index: passedRoundIndex })
+          .eq('id', sid);
+        const { data: sess2 } = await supabase
+          .from('game_sessions')
+          .select('current_item_index')
+          .eq('id', sid)
+          .single();
+        setRoundIndex(passedRoundIndex);
+        setCursor(Math.min(sess2?.current_item_index ?? 0, ITEMS_PER_ROUND - 1));
       }
 
+      // 🔊 Load lessons with audio (NOT examples)
       const { data, error } = await supabase
         .from('phonics_lessons')
         .select('id,label,audio_url,group_name,order_index')
         .order('group_name', { ascending: true })
         .order('order_index', { ascending: true });
 
-      if (error) { Alert.alert('Error', 'Failed to load game data.'); setLoading(false); return; }
+      if (error) { Alert.alert('Error', 'Failed to load sounds.'); setLoading(false); return; }
 
-      const withAudio = (data as Lesson[]).filter(r => !!r.audio_url);
-      const unique = Array.from(new Map(withAudio.map(r => [r.label, r])).values());
-      setPool(unique);
+      const withAudio = (data || [])
+        .filter((r: any) => !!r.audio_url && !!r.label)
+        .map((r: any) => ({
+          id: String(r.id),
+          label: String(r.label),
+          audio_url: String(r.audio_url),
+          group_name: r.group_name ? String(r.group_name) : null,
+        }));
+
+      // de-dup by label for stability
+      const uniq = Array.from(new Map(withAudio.map(r => [r.label, r])).values());
+      setPool(uniq);
       setLoading(false);
     })();
 
     return () => { if (soundRef.current) soundRef.current.unloadAsync(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const buildRound = () => {
-    const poolCopy = [...pool].sort(() => Math.random() - 0.5);
-    const picked: Lesson[] = [];
-    const usedNow = new Set(used);
-
-    for (const r of poolCopy) {
-      const key = r.label + '|' + r.audio_url;
-      if (!usedNow.has(key)) {
-        picked.push(r); usedNow.add(key);
-        if (picked.length === ITEMS_PER_ROUND) break;
-      }
-    }
-    if (picked.length < ITEMS_PER_ROUND) {
-      usedNow.clear();
-      while (picked.length < ITEMS_PER_ROUND) picked.push(pool[Math.floor(Math.random() * pool.length)]);
-    }
+    // stable ordering
+    const poolSorted = [...pool].sort((a, b) => a.label.localeCompare(b.label));
+    // choose the fixed set for this round
+    const picked = deterministicPick(poolSorted, roundIndex, ITEMS_PER_ROUND);
 
     const itemsBuilt: Item[] = picked.map(correct => {
-      const distractors = pool.filter(r => r.label !== correct.label).sort(() => Math.random() - 0.5).slice(0, 3).map(r => r.label);
-      const choices = [...distractors, correct.label].sort(() => Math.random() - 0.5);
-      const correctIndex = choices.findIndex(c => c === correct.label);
-      return { audio: correct.audio_url!, choices, correctIndex };
+      // deterministic distractors: first 3 labels after filtering out the correct
+      const distractors = poolSorted
+        .filter(r => r.label !== correct.label)
+        .slice(0, 3)
+        .map(r => r.label.toUpperCase());
+
+      const correctUpper = correct.label.toUpperCase();
+      const baseChoices = [...distractors, correctUpper];
+
+      // place the correct choice deterministically
+      const { arranged, pos } = placeCorrect(baseChoices, correctUpper, correct.label);
+
+      return { audio: correct.audio_url, choices: arranged, correctIndex: pos };
     });
 
     setItems(itemsBuilt);
-    setUsed(usedNow);
-    setCursor(0); setSelected(null);
-    setAnswers(Array(ITEMS_PER_ROUND).fill(null));
+    if (cursor < 0 || cursor >= ITEMS_PER_ROUND) setCursor(0);
+    if (!answers.length) setAnswers(Array(ITEMS_PER_ROUND).fill(null));
   };
 
-  useEffect(() => { if (pool.length) buildRound(); }, [pool, roundIndex]);
+  useEffect(() => { if (pool.length) buildRound(); /* eslint-disable-next-line */ }, [pool, roundIndex]);
+
   const current = useMemo(() => items[cursor], [items, cursor]);
 
   const playSound = async () => {
@@ -126,7 +163,8 @@ export default function SoundMatchScreen() {
 
     if (sessionId) {
       await supabase.from('game_sessions').update({
-        current_round_index: roundIndex, current_item_index: Math.min(cursor + 1, ITEMS_PER_ROUND - 1),
+        current_round_index: roundIndex,
+        current_item_index: Math.min(cursor + 1, ITEMS_PER_ROUND - 1),
       }).eq('id', sessionId);
     }
 
@@ -151,14 +189,20 @@ export default function SoundMatchScreen() {
         }).eq('id', sessionId);
         if (advErr) console.warn('session advance error', advErr);
 
-        const { error: insErr } = await supabase.from('game_rounds').insert([{
-          session_id: sessionId, user_id: uid,
-          round_index: roundIndex, score: roundScore, total_items: ITEMS_PER_ROUND,
-          wrong_review_payload: wrong
-        }]);
-        if (insErr) {
-          console.warn('game_rounds insert error', insErr);
-          Alert.alert('Save error', insErr.message || 'Could not save round history.');
+        const { error: upErr } = await supabase
+          .from('game_rounds')
+          .upsert([{
+            session_id: sessionId,
+            user_id: uid, // keep RLS happy
+            round_index: roundIndex,
+            score: roundScore,
+            total_items: ITEMS_PER_ROUND,
+            wrong_review_payload: wrong
+          }], { onConflict: 'session_id,round_index' });
+
+        if (upErr) {
+          console.warn('game_rounds upsert error', upErr);
+          Alert.alert('Save error', upErr.message || 'Could not save round history.');
         }
       }
 
@@ -179,16 +223,22 @@ export default function SoundMatchScreen() {
         `Score: ${roundScore}/${ITEMS_PER_ROUND}`,
         [
           { text: 'Review wrong answers', onPress: () => navigation.navigate('GameReview', { wrong }) },
-          { text: 'View all rounds', onPress: () => navigation.navigate('GameRounds', { sessionId }) },
-          { text: roundIndex >= TOTAL_ROUNDS ? 'Finish' : 'Next Round',
-            onPress: () => { if (roundIndex >= TOTAL_ROUNDS) navigation.goBack(); else setRoundIndex(r => r + 1); } },
+          { text: 'View all rounds', onPress: () => navigation.navigate('GameRounds', { sessionId, kind: GAME_KEY }) },
+          {
+            text: roundIndex >= TOTAL_ROUNDS ? 'Finish' : 'Next Round',
+            onPress: () => { if (roundIndex >= TOTAL_ROUNDS) navigation.goBack(); else setRoundIndex(r => r + 1); }
+          },
         ]
       );
     }
   };
 
   if (loading || !current) {
-    return (<BaseScreen title="Sound Match" showBack><View style={styles.center}><ActivityIndicator size="large" /></View></BaseScreen>);
+    return (
+      <BaseScreen title="Sound Match" showBack>
+        <View style={styles.center}><ActivityIndicator size="large" /></View>
+      </BaseScreen>
+    );
   }
 
   return (
@@ -202,7 +252,11 @@ export default function SoundMatchScreen() {
           {current.choices.map((opt, i) => {
             const sel = i === (selected ?? -1);
             return (
-              <TouchableOpacity key={opt + i} style={[styles.optionBtn, { borderColor: sel ? '#000' : '#ccc', backgroundColor: sel ? '#fff6d6' : '#fff' }]} onPress={() => setSelected(i)}>
+              <TouchableOpacity
+                key={opt + i}
+                style={[styles.optionBtn, { borderColor: sel ? '#000' : '#ccc', backgroundColor: sel ? '#fff6d6' : '#fff' }]}
+                onPress={() => setSelected(i)}
+              >
                 <Text style={[styles.optionText, { fontFamily }]}>{opt.toUpperCase()}</Text>
               </TouchableOpacity>
             );
@@ -210,7 +264,10 @@ export default function SoundMatchScreen() {
         </View>
 
         <View style={styles.bottomRow}>
-          <TouchableOpacity style={styles.wordBtn} onPress={() => { if (cursor > 0) { setCursor(c => c - 1); setSelected(answers[cursor - 1]); } }}>
+          <TouchableOpacity
+            style={styles.wordBtn}
+            onPress={() => { if (cursor > 0) { setCursor(c => c - 1); setSelected(answers[cursor - 1]); } }}
+          >
             <Text style={[styles.wordBtnText, { fontFamily }]}>BACK</Text>
           </TouchableOpacity>
           <TouchableOpacity style={[styles.wordBtnPrimary, { backgroundColor: accentColor }]} onPress={nextItem}>
@@ -219,9 +276,12 @@ export default function SoundMatchScreen() {
         </View>
 
         <Text style={styles.progress}>Item {cursor + 1}/{ITEMS_PER_ROUND}</Text>
+
         {sessionId ? (
-          <TouchableOpacity onPress={() => navigation.navigate('GameRounds', { sessionId })}>
-            <Text style={{ textAlign: 'center', marginTop: 6, color: '#777', textDecorationLine: 'underline' }}>View Rounds</Text>
+          <TouchableOpacity onPress={() => navigation.navigate('GameRounds', { sessionId, kind: GAME_KEY })}>
+            <Text style={{ textAlign: 'center', marginTop: 6, color: '#777', textDecorationLine: 'underline' }}>
+              View Rounds
+            </Text>
           </TouchableOpacity>
         ) : null}
       </View>
@@ -233,7 +293,8 @@ const styles = StyleSheet.create({
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   container: { flex: 1, paddingHorizontal: 16, paddingTop: 8 },
   speaker: { paddingVertical: 10, paddingHorizontal: 14, borderRadius: 10, alignSelf: 'flex-start', marginBottom: 16 },
-  options: { gap: 10 }, optionBtn: { paddingVertical: 14, paddingHorizontal: 16, borderRadius: 12, borderWidth: 2 },
+  options: { gap: 10 },
+  optionBtn: { paddingVertical: 14, paddingHorizontal: 16, borderRadius: 12, borderWidth: 2 },
   optionText: { fontSize: 22, fontWeight: '800', color: '#222' },
   bottomRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 4, marginTop: 22, gap: 12 },
   wordBtn: { backgroundColor: '#e9e9e9', paddingVertical: 12, paddingHorizontal: 18, borderRadius: 10 },

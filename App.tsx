@@ -55,7 +55,7 @@ import AccountScreen from './src/features/learner/main/screens/Profile';
 /** ----------------------- Admin ----------------------- */
 import AdminDrawerNavigator from './src/navigation/admin/AdminDrawerNavigator';
 import AdminPhonicsScreen from './src/features/admin/screens/ManagePhonics';
-import AdminPhonicsGroupScreen from './src/features/admin/screens/PhonicsGroups';
+import AdminPhonicsGroupScreen from './src/features/admin/screens/ManageGroups';
 import AdminPhonicsLessonScreen from './src/features/admin/screens/ManageLessons';
 import AdminGameSettingsScreen from './src/features/admin/screens/GameSettings';
 import AdminGamesScreen from './src/features/admin/screens/ManageGames';
@@ -145,7 +145,7 @@ export default function App() {
     ['AdminGameSettings', AdminGameSettingsScreen],
     ['AdminFeedback', AdminFeedbackScreen],
     ['AdminAccounts', AdminAccountsScreen],
-    ['AdminNotificationsScreen', AdminNotificationsScreen],
+    ['AdminNotifications', AdminNotificationsScreen],
     ['AdminAboutEditor', AdminAboutEditorScreen],
     ['AdminHelpEditor', AdminHelpEditorScreen],
     ['AdminProfile', AdminProfileScreen],

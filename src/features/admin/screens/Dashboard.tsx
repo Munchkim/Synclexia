@@ -133,7 +133,7 @@ export default function AdminDashboardScreen() {
         </View>
 
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
-          <TouchableOpacity onPress={() => navigation.navigate('AdminNotificationsScreen')}>
+          <TouchableOpacity onPress={() => navigation.navigate('AdminNotifications')}>
             <View>
               <Ionicons name="notifications-outline" size={26} color={textDark} />
               {counts.unreadNotifs > 0 && (

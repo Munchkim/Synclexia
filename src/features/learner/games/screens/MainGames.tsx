@@ -23,14 +23,17 @@ export default function GamesMainScreen() {
     { key: 'fill_blank',   title: 'Fill the Blank',   subtitle: 'Missing letter(s) challenge',    icon: <Ionicons name="text" size={28} color="#000" /> },
   ];
 
-  const onOpenGame = (type: GameType) => {
-    switch (type) {
-      case 'sound_match':  navigation.navigate('SoundMatch'); break;
-      case 'name_picture': navigation.navigate('NamePicture'); break;
-      case 'rhyme_time':   navigation.navigate('RhymeTime'); break;
-      case 'fill_blank':   navigation.navigate('FillBlank'); break;
-    }
-  };
+// GamesMainScreen.tsx
+const onOpenGame = (type: GameType) => {
+  switch (type) {
+    case 'sound_match':  navigation.navigate('SoundMatch');  break;
+    case 'name_picture': navigation.navigate('NamePicture'); break;
+    case 'rhyme_time':   navigation.navigate('RhymeTime');   break;
+    case 'fill_blank':   navigation.navigate('FillBlank');   break;
+  }
+};
+
+
 
   return (
     <BaseScreen title="Games" showBack>

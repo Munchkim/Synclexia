@@ -7,7 +7,7 @@ import React, {
   useCallback,
   useEffect,
 } from 'react';
-import { View, StyleSheet, ViewStyle, PanResponder } from 'react-native';
+import { View, StyleSheet, StyleProp, ViewStyle, PanResponder } from 'react-native';
 import Svg, { Path, Circle, G } from 'react-native-svg';
 
 export type TracingCanvasRef = {
@@ -20,13 +20,13 @@ type Point = { x: number; y: number };
 
 type Props = {
   strokeColor?: string;
-  containerStyle?: ViewStyle;
   guidePaths?: string[] | Point[][];
   strokeWidth?: number;
   onPathChange?: (paths: string[]) => void;
   onStrokeComplete?: (stroke: string) => void;
   showGuide?: boolean;
   glyphScale?: number;
+  containerStyle?: StyleProp<ViewStyle>; 
 };
 
 const VIEWBOX = 400;
@@ -144,6 +144,7 @@ const TracingCanvas = forwardRef<TracingCanvasRef, Props>(({
   guidePaths = [],
   strokeWidth = 12,
   onPathChange,
+  
   onStrokeComplete,
   showGuide = true,
   glyphScale = 1.2,

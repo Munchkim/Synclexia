@@ -53,7 +53,7 @@ export type RootStackParamList = {
   AdminGameSettings: undefined;
   AdminFeedback: undefined;
   AdminAccounts: undefined;
-  AdminNotificationsScreen: undefined;
+  AdminNotifications: undefined;
   AdminAboutEditor: undefined;
   AdminHelpEditor: undefined;
   AdminProfile: undefined;

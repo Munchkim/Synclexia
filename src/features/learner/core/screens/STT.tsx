@@ -1,14 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
-import * as FileSystem from 'expo-file-system';
 import { Audio } from 'expo-av';
 import { useAppSettings } from '../../../../context/AppSettings';
 import BaseScreen from '../../../../components/BaseScreen';
 
-import Constants from 'expo-constants';
 
-const ASSEMBLY_API_KEY = process.env.EXPO_PUBLIC_ASSEMBLY_API_KEY;
+const ASSEMBLY_API_KEY =
+  (require('expo-constants').default.expoConfig?.extra as any)?.EXPO_PUBLIC_ASSEMBLY_API_KEY ??
+  process.env.EXPO_PUBLIC_ASSEMBLY_API_KEY;
 
 export default function STTScreen() {
   const { accentColor, fontFamily, fontSize } = useAppSettings();
@@ -20,7 +20,7 @@ export default function STTScreen() {
   const [isRecording, setIsRecording] = useState(false);
 
   useEffect(() => {
-    let timer: NodeJS.Timeout;
+    let timer: ReturnType<typeof setTimeout>;
     if (isRecording) {
       timer = setTimeout(() => stopRecording(), 10000);
     }

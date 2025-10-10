@@ -1,5 +1,6 @@
 // src/context/AppSettings.tsx
 import React, { createContext, useContext, useMemo, useState, ReactNode, useCallback } from 'react';
+import { Platform } from 'react-native';
 
 type FontSize = 'small' | 'medium' | 'large';
 
@@ -13,9 +14,12 @@ interface SettingsContextProps {
   setColors: (bg: string, accent: string) => void;
 }
 
+// Platform-aware Arial fallback
+const DEFAULT_FONT = Platform.select({ android: 'sans-serif', ios: 'Arial', default: 'Arial' })!;
+
 const defaultSettings: SettingsContextProps = {
   fontSize: 'medium',
-  fontFamily: 'Open Dyslexic',
+  fontFamily: DEFAULT_FONT,          
   bgColor: '#fff9c4',
   accentColor: '#fde695',
   setFontSize: () => {},
@@ -27,7 +31,7 @@ const AppSettingsContext = createContext<SettingsContextProps>(defaultSettings);
 
 export const AppSettingsProvider = ({ children }: { children: ReactNode }) => {
   const [fontSize, setFontSize] = useState<FontSize>('medium');
-  const [fontFamily, setFontFamily] = useState('Open Dyslexic');
+  const [fontFamily, setFontFamily] = useState(DEFAULT_FONT);
   const [bgColor, setBgColor] = useState('#fff9c4');
   const [accentColor, setAccentColor] = useState('#fde695');
 

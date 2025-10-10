@@ -1,3 +1,4 @@
+// screens/admin/phonics/AdminPhonicsGroupScreen.tsx
 import React, { useEffect, useState } from 'react';
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity, Alert, ActivityIndicator,
@@ -15,7 +16,7 @@ type Lesson = {
   order_index: number;
   audio_url: string | null;
   video_url: string | null;
-  tracing_url: string | null;
+  // ⬅️ removed tracing_url
 };
 
 type RouteParams = { groupId: string; title?: string };
@@ -42,7 +43,8 @@ export default function AdminPhonicsGroupScreen() {
 
     const { data: lData, error: lErr } = await supabase
       .from('phonics_lessons')
-      .select('id,label,phoneme,order_index,audio_url,video_url,tracing_url')
+      // ⬇️ no tracing fields in the select
+      .select('id,label,phoneme,order_index,audio_url,video_url')
       .eq('group_id', groupId)
       .order('order_index', { ascending: true });
 
@@ -69,7 +71,8 @@ export default function AdminPhonicsGroupScreen() {
         <Text style={[styles.lessonTitle, { fontFamily }]}>{item.label}</Text>
         <Text style={styles.meta}>Order: {item.order_index}</Text>
         <Text style={[styles.meta, { marginTop: 2 }]}>
-          {(item.video_url || item.audio_url || item.tracing_url) ? 'Configured' : 'Not configured yet'}
+          {/* ⬇️ Configured only if audio or video exists */}
+          {(item.video_url || item.audio_url) ? 'Configured' : 'Not configured yet'}
         </Text>
       </View>
       <Ionicons name="chevron-forward" size={20} color="#444" />

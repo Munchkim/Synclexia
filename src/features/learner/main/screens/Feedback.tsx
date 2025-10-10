@@ -15,9 +15,9 @@ import { useRoute, useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 
 import BaseScreen from '../../../../components/BaseScreen';
-import { useAppSettings } from '../../../../../src/context/AppSettings';
-import { useUser } from '../../../../../src/context/UserContext';
-import { supabase } from '../../../../../src/lib/supabaseClient';
+import { useAppSettings } from '../../../../context/AppSettings';
+import { useUser } from '../../../../context/UserContext';
+import { supabase } from '../../../../lib/supabaseClient';
 
 type FeedbackRow = {
   id: string;
@@ -32,7 +32,7 @@ type ReplyRow = {
   id: string;
   feedback_id: string;
   admin_id: string | null;
-  body: string;     
+  body: string;
   created_at: string;
 };
 
@@ -58,9 +58,8 @@ export default function FeedbackScreen() {
   const focusId: string | undefined = route.params?.focusId;
 
   const tokens = useMemo(() => {
-    const chipResolved = '#2ecc71';
-    const chipUnresolved = '#e67e22';
-    return { chipResolved, chipUnresolved, cardBorder: '#e9eef3', replyBorder: '#eef2f7' };
+    // learner-facing: responded/awaiting (not resolved flag)
+    return { cardBorder: '#e9eef3', replyBorder: '#eef2f7' };
   }, []);
 
   const fetchAll = useCallback(async () => {
@@ -106,9 +105,7 @@ export default function FeedbackScreen() {
     }
   }, [user?.id, refreshing]);
 
-  useEffect(() => {
-    fetchAll();
-  }, [fetchAll]);
+  useEffect(() => { fetchAll(); }, [fetchAll]);
 
   useEffect(() => {
     if (!user?.id) return;
@@ -158,6 +155,36 @@ export default function FeedbackScreen() {
     fetchAll();
   };
 
+  const deleteFeedback = async (row: FeedbackRow) => {
+    if (!user?.id) return;
+    const replies = repliesByFb[row.id] || [];
+    if (replies.length > 0) {
+      Alert.alert('Cannot delete', 'This feedback already has admin replies.');
+      return;
+    }
+    Alert.alert('Delete feedback?', 'This cannot be undone.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete', style: 'destructive',
+        onPress: async () => {
+          const { error } = await supabase
+            .from('feedbacks')
+            .delete()
+            .eq('id', row.id)
+            .eq('user_id', user.id); // RLS: owner-only
+          if (error) {
+            Alert.alert('Error', error.message);
+            return;
+          }
+          setFeedbacks(prev => prev.filter(f => f.id !== row.id));
+          const copy = { ...repliesByFb };
+          delete copy[row.id];
+          setRepliesByFb(copy);
+        }
+      }
+    ]);
+  };
+
   const onRefresh = () => {
     setRefreshing(true);
     fetchAll();
@@ -179,32 +206,47 @@ export default function FeedbackScreen() {
 
   const renderItem = ({ item }: { item: FeedbackRow }) => {
     const replies = repliesByFb[item.id] || [];
-    const isResolved = !!item.resolved;
+    const hasReplies = replies.length > 0;
 
     return (
       <View style={[styles.card, { borderColor: tokens.cardBorder, backgroundColor: '#fff' }]}>
         <View style={styles.cardHeader}>
-          <View style={{ flex: 1 }}>
-            <Text style={[styles.timestamp, { fontFamily }]}>
-              🕒 {new Date(item.created_at).toLocaleString()}
-            </Text>
-          </View>
-          <View
-            style={[
-              styles.statusChip,
-              { borderColor: isResolved ? tokens.chipResolved : tokens.chipUnresolved }
-            ]}
-          >
-            <Text
-              style={[
-                styles.statusTxt,
-                { fontFamily, color: isResolved ? '#2c7f51' : '#7a4c13' }
-              ]}
-            >
-              {isResolved ? 'Resolved' : 'Unresolved'}
-            </Text>
-          </View>
-        </View>
+  <View style={{ flex: 1 }}>
+    <Text style={[styles.timestamp, { fontFamily }]}>
+      🕒 {new Date(item.created_at).toLocaleString()}
+    </Text>
+  </View>
+
+  {/* Learner-facing status: Responded / Awaiting reply */}
+  <View
+    style={[
+      styles.statusChip,
+      { borderColor: hasReplies ? '#2ecc71' : '#e67e22' }
+    ]}
+  >
+    <Text
+      style={[
+        styles.statusTxt,
+        { fontFamily, color: hasReplies ? '#2c7f51' : '#7a4c13' }
+      ]}
+    >
+      {hasReplies ? 'Responded' : 'Awaiting reply'}
+    </Text>
+  </View>
+
+  {/* Delete icon (only when there are no admin replies) */}
+  {!hasReplies && (
+    <TouchableOpacity
+      onPress={() => deleteFeedback(item)}
+      style={styles.iconBtn}
+      accessibilityLabel="Delete feedback"
+      accessibilityHint="Deletes this feedback permanently"
+    >
+      <Ionicons name="trash-outline" size={18} color="#b00020" />
+    </TouchableOpacity>
+  )}
+</View>
+
 
         <View style={{ marginTop: 4, marginBottom: 6 }}>{renderStars(item.rating || 0)}</View>
 
@@ -226,6 +268,21 @@ export default function FeedbackScreen() {
             ))}
           </View>
         )}
+
+        {/* Delete: allowed only if no admin replies yet */}
+        <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 8 }}>
+          <TouchableOpacity
+            onPress={() => deleteFeedback(item)}
+            disabled={replies.length > 0}
+            style={[
+              styles.deleteBtn,
+              { opacity: replies.length > 0 ? 0.5 : 1, borderColor: '#e6ebf1', backgroundColor: '#fff' }
+            ]}
+          >
+            <Ionicons name="trash-outline" size={18} color="#b00020" />
+            <Text style={[styles.deleteTxt, { fontFamily, color: '#b00020' }]}>Delete</Text>
+          </TouchableOpacity>
+        </View>
       </View>
     );
   };
@@ -339,18 +396,18 @@ const styles = StyleSheet.create({
     paddingVertical: 10, paddingHorizontal: 12, borderRadius: 10, borderWidth: 1,
   },
   ctaTxt: { fontWeight: '700', color: '#1c1c1c' },
+iconBtn: { marginLeft: 10, padding: 6, borderRadius: 8 },
 
   card: { borderWidth: 1, borderRadius: 14, padding: 12, marginHorizontal: 2, marginBottom: 12 },
   cardHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 6 },
   timestamp: { fontSize: 12, color: '#666' },
+
   statusChip: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 14, borderWidth: 1 },
   statusTxt: { fontSize: 12, fontWeight: '700' },
 
   content: { fontSize: 14, color: '#222', marginTop: 2 },
 
-  thread: {
-    marginTop: 10, borderWidth: 1, borderRadius: 10, padding: 10,
-  },
+  thread: { marginTop: 10, borderWidth: 1, borderRadius: 10, padding: 10 },
   threadLabel: { fontWeight: '700', color: '#333', marginBottom: 6 },
   replyBubble: { backgroundColor: '#fff', borderWidth: 1, borderRadius: 10, padding: 10, marginBottom: 8 },
   replyMeta: { fontSize: 12, color: '#666' },
@@ -363,4 +420,7 @@ const styles = StyleSheet.create({
   input: { minHeight: 110, borderWidth: 1, borderRadius: 10, padding: 12, textAlignVertical: 'top', marginBottom: 12 },
   modalBtn: { flex: 1, borderWidth: 1, borderRadius: 10, alignItems: 'center', paddingVertical: 12 },
   modalBtnTxt: { fontWeight: '800' },
+
+  deleteBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 8, paddingHorizontal: 10, borderRadius: 10, borderWidth: 1 },
+  deleteTxt: { fontWeight: '700' },
 });

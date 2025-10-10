@@ -7,6 +7,9 @@
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
+    "extra": {
+      "EXPO_PUBLIC_OCR_API_KEY": "K81942883388957"
+    },
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",

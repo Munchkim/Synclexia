@@ -1,3 +1,4 @@
+// src/features/learner/ui/LearnerDrawerContent.tsx
 import React, { useEffect, useState, useCallback } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Modal, Alert } from 'react-native';
 import { DrawerContentScrollView, DrawerContentComponentProps } from '@react-navigation/drawer';
@@ -37,14 +38,9 @@ const CustomDrawer: React.FC<DrawerContentComponentProps> = (props) => {
       const u = data?.user;
       if (!u) return;
 
-      // Prefer username from users table, fallback to auth metadata
       let uname = '';
       try {
-        const { data: row } = await supabase
-          .from('users')
-          .select('username')
-          .eq('id', u.id)
-          .single();
+        const { data: row } = await supabase.from('users').select('username').eq('id', u.id).single();
         if (row?.username) uname = row.username;
       } catch {}
       if (!uname) uname = (u.user_metadata as any)?.username || '';
@@ -138,6 +134,17 @@ const CustomDrawer: React.FC<DrawerContentComponentProps> = (props) => {
       <Modal visible={showFontSize} transparent animationType="fade" onRequestClose={() => setShowFontSize(false)}>
         <View style={styles.centeredModal}>
           <View style={[styles.modalWide, { backgroundColor: bgColor }]}>
+            {/* Close X (top-left) */}
+            <TouchableOpacity
+              onPress={() => setShowFontSize(false)}
+              style={styles.modalClose}
+              hitSlop={{ top: 8, left: 8, right: 8, bottom: 8 }}
+              accessibilityRole="button"
+              accessibilityLabel="Close"
+            >
+              <Ionicons name="close" size={22} color="#333" />
+            </TouchableOpacity>
+
             <Text style={[styles.modalTitle, { fontFamily, fontSize: fontSizeValue + 2 }]}>Font Size</Text>
 
             <View style={styles.sliderRow}>
@@ -170,7 +177,20 @@ const CustomDrawer: React.FC<DrawerContentComponentProps> = (props) => {
       {/* Font Style Modal */}
       <Modal visible={showFontStyle} transparent animationType="fade" onRequestClose={() => setShowFontStyle(false)}>
         <View style={[styles.modal, { backgroundColor: bgColor }]}>
-          <Text style={[styles.modalTitle, { fontFamily, fontSize: fontSizeValue + 2 }]}>Font Style</Text>
+          {/* Close X (top-left) */}
+          <TouchableOpacity
+            onPress={() => setShowFontStyle(false)}
+            style={styles.modalClose}
+            hitSlop={{ top: 8, left: 8, right: 8, bottom: 8 }}
+            accessibilityRole="button"
+            accessibilityLabel="Close"
+          >
+            <Ionicons name="close" size={22} color="#333" />
+          </TouchableOpacity>
+
+          <Text style={[styles.modalTitle, { fontFamily, fontSize: fontSizeValue + 2, paddingTop: 10 }]}>
+            Font Style
+          </Text>
           {fontOptions.map((font) => (
             <TouchableOpacity
               key={font}
@@ -186,7 +206,20 @@ const CustomDrawer: React.FC<DrawerContentComponentProps> = (props) => {
       {/* Background Color Modal */}
       <Modal visible={showBgColor} transparent animationType="fade" onRequestClose={() => setShowBgColor(false)}>
         <View style={[styles.modal, { backgroundColor: bgColor }]}>
-          <Text style={[styles.modalTitle, { fontFamily, fontSize: fontSizeValue + 2 }]}>Background Color</Text>
+          {/* Close X (top-left) */}
+          <TouchableOpacity
+            onPress={() => setShowBgColor(false)}
+            style={styles.modalClose}
+            hitSlop={{ top: 8, left: 8, right: 8, bottom: 8 }}
+            accessibilityRole="button"
+            accessibilityLabel="Close"
+          >
+            <Ionicons name="close" size={22} color="#333" />
+          </TouchableOpacity>
+
+          <Text style={[styles.modalTitle, { fontFamily, fontSize: fontSizeValue + 2, paddingTop: 10 }]}>
+            Background Color
+          </Text>
           <View style={styles.colorGridContainer}>
             {colorPairs.map(({ bg, accent }, index) => (
               <TouchableOpacity
@@ -217,17 +250,52 @@ const styles = StyleSheet.create({
   iconWrapper: { width: 26, alignItems: 'center' },
   item: { marginLeft: 16, color: '#222' },
   divider: { height: 1, backgroundColor: '#aaa', marginVertical: 14, opacity: 0.5 },
-  modal: { marginTop: '30%', backgroundColor: '#fff9c4', marginHorizontal: 30, borderRadius: 16, padding: 20, elevation: 10 },
+
+  modal: {
+    marginTop: '30%',
+    backgroundColor: '#fff9c4',
+    marginHorizontal: 30,
+    borderRadius: 16,
+    padding: 20,
+    elevation: 10,
+    position: 'relative',
+  },
   modalTitle: { fontWeight: 'bold', marginBottom: 14, textAlign: 'center' },
-  modalWide: { width: '85%', borderRadius: 20, padding: 24, elevation: 12 },
+  modalWide: {
+    width: '85%',
+    borderRadius: 20,
+    padding: 24,
+    elevation: 12,
+    position: 'relative',
+  },
   centeredModal: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  modalClose: {
+    position: 'absolute',
+    top: 8,
+    left: 8,
+    padding: 6,
+    borderRadius: 14,
+    backgroundColor: 'transparent',
+  },
+
   sliderRow: { flexDirection: 'row', alignItems: 'center', marginTop: 12 },
   sliderLabel: { color: '#333' },
-  okButton: { marginTop: 24, backgroundColor: '#333', paddingVertical: 10, paddingHorizontal: 28, borderRadius: 12, alignSelf: 'center' },
+  okButton: {
+    marginTop: 24,
+    backgroundColor: '#333',
+    paddingVertical: 10,
+    paddingHorizontal: 28,
+    borderRadius: 12,
+    alignSelf: 'center',
+  },
   okText: { color: '#fff', fontWeight: 'bold' },
   option: { paddingVertical: 8, alignItems: 'center' },
+
   colorGridContainer: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', gap: 14 },
-  colorSwatch: { width: 130, height: 100, borderRadius: 16, marginBottom: 16, borderWidth: 1.5, justifyContent: 'center', alignItems: 'center' },
+  colorSwatch: {
+    width: 130, height: 100, borderRadius: 16, marginBottom: 16,
+    borderWidth: 1.5, justifyContent: 'center', alignItems: 'center'
+  },
   accentBox: { width: 36, height: 36, borderRadius: 8, position: 'absolute', top: 10, right: 10, borderWidth: 1, borderColor: '#888' },
   checkmark: { position: 'absolute', bottom: 8, left: 8, fontSize: 18, fontWeight: 'bold', color: '#333' },
 });

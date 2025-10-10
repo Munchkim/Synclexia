@@ -1,3 +1,4 @@
+// src/features/admin/screens/Help.tsx
 import React, { useEffect, useMemo, useState } from 'react';
 import { View, Text, StyleSheet, FlatList, TouchableOpacity, Modal, TextInput, Alert, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -20,7 +21,6 @@ export default function AdminHelpEditorScreen() {
   const [faqs, setFaqs] = useState<FAQ[]>([]);
   const [query, setQuery] = useState('');
 
-  // editor modal
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<FAQ | null>(null);
   const [q, setQ] = useState('');
@@ -38,7 +38,7 @@ export default function AdminHelpEditorScreen() {
       .order('order_index', { ascending: true })
       .order('created_at', { ascending: true });
     if (error) { Alert.alert('Error', error.message); setLoading(false); return; }
-    setFaqs(data as FAQ[]);
+    setFaqs((data || []) as FAQ[]);
     setLoading(false);
   };
 
@@ -104,19 +104,32 @@ export default function AdminHelpEditorScreen() {
   };
 
   const move = async (row: FAQ, dir: -1 | 1) => {
-    // simple swap by order_index
-    const idx = faqs.findIndex(f => f.id === row.id);
-    const swapIdx = idx + dir;
-    if (swapIdx < 0 || swapIdx >= faqs.length) return;
+  const idx = faqs.findIndex(f => f.id === row.id);
+  const swapIdx = idx + dir;
+  if (swapIdx < 0 || swapIdx >= faqs.length) return;
 
-    const a = faqs[idx], b = faqs[swapIdx];
-    const { error } = await supabase.from('faqs').upsert([
-      { id: a.id, order_index: b.order_index },
-      { id: b.id, order_index: a.order_index },
-    ]);
-    if (error) Alert.alert('Error', error.message);
-    else load();
-  };
+  const aRow = faqs[idx];
+  const bRow = faqs[swapIdx];
+
+  setFaqs(prev => {
+    const copy = [...prev];
+    [copy[idx], copy[swapIdx]] = [copy[swapIdx], copy[idx]];
+    return copy;
+  });
+
+  const [r1, r2] = await Promise.all([
+    supabase.from('faqs').update({ order_index: bRow.order_index }).eq('id', aRow.id),
+    supabase.from('faqs').update({ order_index: aRow.order_index }).eq('id', bRow.id),
+  ]);
+
+  if (r1.error || r2.error) {
+    await load();
+    Alert.alert('Error', (r1.error || r2.error)?.message ?? 'Failed to reorder FAQ.');
+  } else {
+    await load();
+  }
+};
+
 
   return (
     <BaseScreen title="Edit Help / FAQs" showBack>

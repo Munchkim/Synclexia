@@ -1,16 +1,15 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   View, Text, StyleSheet, TextInput, TouchableOpacity, Image, FlatList, Alert,
-  ActivityIndicator, Modal, PanResponder, Dimensions, ScrollView,
+  ActivityIndicator, Modal, ScrollView,
 } from 'react-native';
 import { useRoute } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import { Ionicons } from '@expo/vector-icons';
-import Svg, { Path } from 'react-native-svg';
 import BaseScreen from '../../../components/BaseScreen';
 import { supabase } from '../../../../src/lib/supabaseClient';
-import { uploadPublicFile, uploadStringAsFile } from '../../../../src/lib/storage/upload';
+import { uploadPublicFile } from '../../../../src/lib/storage/upload';
 import { useAppSettings } from '../../../../src/context/AppSettings';
 
 type TabKey = 'media' | 'examples';
@@ -18,12 +17,22 @@ type ExampleItem = { label: string; image_url: string; audio_url?: string };
 
 type LessonRow = {
   label: string;
+  phoneme: string | null;        // ⬅️ we also fetch phoneme now
   video_url: string | null;
-  video_urls?: any;            
+  video_urls?: any;              // legacy can be string/array
   audio_url: string | null;
-  tracing_url: string | null;  
   examples: any;
 };
+
+const DOUBLE_SAME = new Set(['OO', 'EE']);
+const mapPhonemeToDisplay = (p?: string | null) => {
+  const s = (p || '').toUpperCase().trim();
+  if (s === 'THS' || s === 'THV') return 'TH';
+  return s;
+};
+
+const toKey = (s?: string | null) =>
+  (s || '').toUpperCase().replace(/[^A-Z]/g, '');
 
 export default function AdminPhonicsLessonScreen() {
   const route = useRoute<any>();
@@ -37,10 +46,13 @@ export default function AdminPhonicsLessonScreen() {
   const [saving, setSaving] = useState(false);
 
   const [label, setLabel] = useState(incomingLabel || '');
+  const [phoneme, setPhoneme] = useState<string | null>(null);
 
-  const [videoUrl, setVideoUrl] = useState('');
+  // video fields (up to 2)
+  const [videoUrl1, setVideoUrl1] = useState('');
+  const [videoUrl2, setVideoUrl2] = useState('');
+
   const [audioUrl, setAudioUrl] = useState('');
-  const [tracingUrl, setTracingUrl] = useState('');
   const [examples, setExamples] = useState<ExampleItem[]>([]);
 
   const [exModal, setExModal] = useState(false);
@@ -49,71 +61,34 @@ export default function AdminPhonicsLessonScreen() {
   const [exImage, setExImage] = useState<string | null>(null);
   const [exAudio, setExAudio] = useState<string>('');
 
-  const [canvasOpen, setCanvasOpen] = useState(false);
-  const CANVAS_W = Dimensions.get('window').width - 32;
-  const CANVAS_H = 300;
-  type Point = { x: number; y: number };
-  const [strokes, setStrokes] = useState<Point[][]>([]);
-  const currentStroke = useRef<Point[]>([]);
+  // figure out whether this lesson is a digraph (needs two videos)
+  const displayKey = useMemo(() => {
+    const fromPhoneme = mapPhonemeToDisplay(phoneme);
+    const keyFromPhoneme = toKey(fromPhoneme);
+    const keyFromLabel  = toKey(label);
+    // prefer label if it looks valid, fall back to phoneme
+    const k = keyFromLabel || keyFromPhoneme;
+    return k;
+  }, [label, phoneme]);
 
-  const panResponder = useMemo(
-    () =>
-      PanResponder.create({
-        onStartShouldSetPanResponder: () => true,
-        onPanResponderGrant: (evt) => {
-          const { locationX, locationY } = evt.nativeEvent;
-          currentStroke.current = [{ x: locationX, y: locationY }];
-          setStrokes((prev) => [...prev, currentStroke.current]);
-        },
-        onPanResponderMove: (evt) => {
-          const { locationX, locationY } = evt.nativeEvent;
-          currentStroke.current = [...currentStroke.current, { x: locationX, y: locationY }];
-          setStrokes((prev) => {
-            const next = [...prev];
-            next[next.length - 1] = currentStroke.current;
-            return next;
-          });
-        },
-        onPanResponderRelease: () => { currentStroke.current = []; },
-        onPanResponderTerminate: () => { currentStroke.current = []; },
-      }),
-    []
-  );
+  const isDoubleSame = DOUBLE_SAME.has(displayKey);
+  const isDigraph = displayKey.length > 1 && !isDoubleSame;
 
-  const pathFromStroke = (pts: Point[]) => {
-    if (!pts.length) return '';
-    const [h, ...rest] = pts;
-    const move = `M ${h.x.toFixed(1)} ${h.y.toFixed(1)}`;
-    const lines = rest.map((p) => `L ${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(' ');
-    return `${move} ${lines}`;
-  };
-
-  const svgString = useMemo(() => {
-    const paths = strokes
-      .map((s) => `<path d="${pathFromStroke(s)}" fill="none" stroke="#111" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" />`)
-      .join('');
-    return `<?xml version="1.0" encoding="UTF-8"?>
-<svg width="${CANVAS_W}" height="${CANVAS_H}" viewBox="0 0 ${CANVAS_W} ${CANVAS_H}" xmlns="http://www.w3.org/2000/svg">
-  <rect width="100%" height="100%" fill="white" />
-  ${paths}
-</svg>`;
-  }, [strokes]);
-
-  function coerceFirstVideo(v: any): string {
-    if (!v) return '';
-    if (typeof v === 'string') {
-      const parts = v.split(',').map((s) => s.trim()).filter(Boolean);
-      return parts[0] || '';
+  const coerceVideos = (video_url: any, video_urls: any): string[] => {
+    // Accept arrays or comma-separated strings
+    if (Array.isArray(video_urls)) return video_urls.map(String).filter(Boolean);
+    if (typeof video_urls === 'string' && video_urls.trim()) {
+      return video_urls.split(',').map(s => s.trim()).filter(Boolean);
     }
-    if (Array.isArray(v) && v.length > 0) return String(v[0] || '');
-    return '';
-  }
+    if (typeof video_url === 'string' && video_url.trim()) return [video_url.trim()];
+    return [];
+  };
 
   const fetchLesson = async () => {
     setLoading(true);
     const { data, error } = await supabase
       .from('phonics_lessons')
-      .select('label, video_url, video_urls, audio_url, tracing_url, examples')
+      .select('label, phoneme, video_url, video_urls, audio_url, examples')
       .eq('id', lessonId)
       .single();
 
@@ -124,15 +99,15 @@ export default function AdminPhonicsLessonScreen() {
     }
 
     const row = data as LessonRow;
-
     setLabel(row.label || incomingLabel || '');
-    setVideoUrl(row.video_url || coerceFirstVideo(row.video_urls) || '');
+    setPhoneme(row.phoneme || null);
+
+    const vids = coerceVideos(row.video_url, row.video_urls);
+    setVideoUrl1(vids[0] || '');
+    setVideoUrl2(vids[1] || '');
+
     setAudioUrl(row.audio_url || '');
-    setTracingUrl(row.tracing_url || '');
-
-    const ex = Array.isArray(row.examples) ? row.examples : [];
-    setExamples(ex);
-
+    setExamples(Array.isArray(row.examples) ? row.examples : []);
     setLoading(false);
   };
 
@@ -227,19 +202,30 @@ export default function AdminPhonicsLessonScreen() {
   };
 
   const saveLesson = async () => {
-    if (!videoUrl && !audioUrl && !tracingUrl && examples.length === 0) {
-      Alert.alert('Nothing to save', 'Please change at least one field.'); return;
+    // Build final video array (for digraphs we keep up to 2; otherwise just 1)
+    const videos = (isDigraph ? [videoUrl1, videoUrl2] : [videoUrl1])
+      .map(v => (v || '').trim())
+      .filter(Boolean);
+
+    if (videos.length === 0 && !audioUrl && examples.length === 0) {
+      Alert.alert('Nothing to save', 'Please change at least one field.');
+      return;
     }
+
     setSaving(true);
+    const payload: any = {
+      audio_url: audioUrl || null,
+      examples: examples as any,
+      // keep both for compatibility
+      video_url: videos[0] || null,
+      video_urls: videos.length > 0 ? videos : null,
+    };
+
     const { error } = await supabase
       .from('phonics_lessons')
-      .update({
-        video_url: videoUrl || null,
-        audio_url: audioUrl || null,
-        tracing_url: tracingUrl || null,
-        examples: examples as any,
-      })
+      .update(payload)
       .eq('id', lessonId);
+
     setSaving(false);
     if (error) { Alert.alert('Error', error.message); return; }
     Alert.alert('Saved', 'Lesson updated.');
@@ -272,14 +258,31 @@ export default function AdminPhonicsLessonScreen() {
       {activeTab === 'media' ? (
         <ScrollView contentContainerStyle={{ paddingBottom: 24 }} keyboardShouldPersistTaps="handled">
           <View style={styles.section}>
-            <Text style={[styles.label, { fontFamily }]}>Video URL</Text>
-            <TextInput value={videoUrl} onChangeText={setVideoUrl} placeholder="https://..." style={styles.input} />
+            <Text style={[styles.label, { fontFamily }]}>
+              {isDigraph ? 'Video URL A' : 'Video URL'}
+            </Text>
+            <TextInput value={videoUrl1} onChangeText={setVideoUrl1} placeholder="https://..." style={styles.input} />
             <View style={styles.row}>
-              <TouchableOpacity style={styles.btn} onPress={() => pickVideoTo(setVideoUrl)}>
+              <TouchableOpacity style={styles.btn} onPress={() => pickVideoTo(setVideoUrl1)}>
                 <Ionicons name="cloud-upload" size={18} color="#222" /><Text style={styles.btnTxt}>Upload video</Text>
               </TouchableOpacity>
             </View>
           </View>
+
+          {isDigraph && (
+            <View style={styles.section}>
+              <Text style={[styles.label, { fontFamily }]}>Video URL B</Text>
+              <TextInput value={videoUrl2} onChangeText={setVideoUrl2} placeholder="https://..." style={styles.input} />
+              <View style={styles.row}>
+                <TouchableOpacity style={styles.btn} onPress={() => pickVideoTo(setVideoUrl2)}>
+                  <Ionicons name="cloud-upload" size={18} color="#222" /><Text style={styles.btnTxt}>Upload video</Text>
+                </TouchableOpacity>
+              </View>
+              <Text style={{ color: '#666', fontSize: 12, marginTop: 6 }}>
+                Optional: leave blank if you only want one video.
+              </Text>
+            </View>
+          )}
 
           <View style={styles.section}>
             <Text style={[styles.label, { fontFamily }]}>Audio URL</Text>
@@ -289,22 +292,6 @@ export default function AdminPhonicsLessonScreen() {
                 <Ionicons name="musical-notes" size={18} color="#222" /><Text style={styles.btnTxt}>Upload audio</Text>
               </TouchableOpacity>
             </View>
-          </View>
-
-          <View style={styles.section}>
-            <Text style={[styles.label, { fontFamily }]}>Tracing Image/SVG URL</Text>
-            <TextInput value={tracingUrl} onChangeText={setTracingUrl} placeholder="https://..." style={styles.input} />
-            <View style={[styles.row, { flexWrap: 'wrap' }]}>
-              <TouchableOpacity style={styles.btn} onPress={() => pickImageTo(setTracingUrl, 'tracing')}>
-                <Ionicons name="cloud-upload" size={18} color="#222" /><Text style={styles.btnTxt}>Upload image</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.btn} onPress={() => setCanvasOpen(true)}>
-                <Ionicons name="create" size={18} color="#222" /><Text style={styles.btnTxt}>Open tracing canvas</Text>
-              </TouchableOpacity>
-            </View>
-            {!!tracingUrl && (
-              <Text style={{ color: '#666', marginTop: 6, fontSize: 12 }}>Current: {tracingUrl}</Text>
-            )}
           </View>
 
           <TouchableOpacity disabled={saving} style={[styles.saveBtn, { opacity: saving ? 0.6 : 1 }]} onPress={saveLesson}>
@@ -351,6 +338,7 @@ export default function AdminPhonicsLessonScreen() {
         />
       )}
 
+      {/* Example modal */}
       <Modal visible={exModal} transparent animationType="fade" onRequestClose={() => setExModal(false)}>
         <View style={styles.overlay}>
           <View style={styles.modalCard}>
@@ -375,51 +363,6 @@ export default function AdminPhonicsLessonScreen() {
               <TouchableOpacity onPress={saveExample}>
                 <Text style={{ fontWeight: '700' }}>Save</Text>
               </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
-
-      <Modal visible={canvasOpen} transparent animationType="fade" onRequestClose={() => setCanvasOpen(false)}>
-        <View style={styles.overlay}>
-          <View style={styles.canvasCard}>
-            <Text style={[styles.modalTitle, { fontFamily }]}>Tracing Canvas</Text>
-
-            <View style={[styles.canvasBox, { width: CANVAS_W, height: CANVAS_H }]} {...panResponder.panHandlers}>
-              <Svg width={CANVAS_W} height={CANVAS_H}>
-                <Path d={`M 0 0`} fill="none" />
-                {strokes.map((s, i) => (
-                  <Path key={i} d={pathFromStroke(s)} fill="none" stroke="#111" strokeWidth={6} strokeLinecap="round" strokeLinejoin="round" />
-                ))}
-              </Svg>
-            </View>
-
-            <View style={[styles.row, { justifyContent: 'space-between', marginTop: 10 }]}>
-              <TouchableOpacity style={styles.btnLite} onPress={() => setStrokes([])}>
-                <Ionicons name="refresh" size={18} color="#222" /><Text style={styles.btnTxt}>Clear</Text>
-              </TouchableOpacity>
-
-              <View style={{ flexDirection: 'row', gap: 8 }}>
-                <TouchableOpacity
-                  style={styles.btn}
-                  onPress={async () => {
-                    try {
-                      const url = await uploadStringAsFile('phonics', `tracing/${Date.now()}_trace.svg`, svgString, 'image/svg+xml');
-                      setTracingUrl(url);
-                      setCanvasOpen(false);
-                      setStrokes([]);
-                      Alert.alert('Saved', 'Tracing SVG uploaded.');
-                    } catch (e: any) {
-                      Alert.alert('Upload error', e.message);
-                    }
-                  }}
-                >
-                  <Ionicons name="save" size={18} color="#222" /><Text style={styles.btnTxt}>Save SVG</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.btnLite} onPress={() => setCanvasOpen(false)}>
-                  <Text style={{ fontWeight: '700' }}>Close</Text>
-                </TouchableOpacity>
-              </View>
             </View>
           </View>
         </View>
@@ -460,11 +403,7 @@ const styles = StyleSheet.create({
   saveTxt: { fontWeight: '800', color: '#1c1c1c' },
 
   overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', alignItems: 'center', justifyContent: 'center', padding: 12 },
-
   modalCard: { width: '100%', maxWidth: 600, backgroundColor: '#fff', borderRadius: 12, padding: 16, borderWidth: 1, borderColor: '#e6ebf1' },
   modalTitle: { fontWeight: '800', fontSize: 16, marginBottom: 8, color: '#1c1c1c' },
   imageBox: { width: '100%', height: 160, backgroundColor: '#eee', borderRadius: 12, alignItems: 'center', justifyContent: 'center', marginVertical: 10 },
-
-  canvasCard: { width: '100%', maxWidth: 700, backgroundColor: '#fff', borderRadius: 16, padding: 16, borderWidth: 1, borderColor: '#e6ebf1' },
-  canvasBox: { backgroundColor: '#fff', borderRadius: 12, borderWidth: 1, borderColor: '#e6ebf1', overflow: 'hidden' },
 });

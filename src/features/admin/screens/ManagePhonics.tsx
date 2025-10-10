@@ -21,6 +21,8 @@ type Group = {
   lessons_count?: number;
 };
 
+const SPECIAL_TITLES = new Set(['ALTERNATIVES 1', 'ALTERNATIVES 2', 'TRICKY WORDS']);
+
 export default function AdminPhonicsScreen() {
   const { fontFamily } = useAppSettings();
   const navigation = useNavigation<any>();
@@ -43,15 +45,16 @@ export default function AdminPhonicsScreen() {
       return;
     }
 
-    const groupIds = (gData || []).map(g => g.id);
+    // filter out Alternatives 1/2 & Tricky Words (no admin editing here)
+    const filtered = (gData || []).filter(
+      g => !SPECIAL_TITLES.has((g.title || '').toUpperCase())
+    );
+
+    // build per-group lesson counts
     let counts: Record<string, number> = {};
-
-    if (groupIds.length > 0) {
-      const { data: lData, error: lErr } = await supabase
-        .from('phonics_lessons')
-        .select('group_id');
-
-      if (!lErr && lData) {
+    if (filtered.length > 0) {
+      const { data: lData } = await supabase.from('phonics_lessons').select('group_id');
+      if (lData) {
         counts = lData.reduce((acc: Record<string, number>, cur: any) => {
           const k = cur.group_id ?? '';
           acc[k] = (acc[k] || 0) + 1;
@@ -60,18 +63,12 @@ export default function AdminPhonicsScreen() {
       }
     }
 
-    const enriched = (gData || []).map(g => ({
-      ...g,
-      lessons_count: counts[g.id] || 0,
-    }));
-
+    const enriched = filtered.map(g => ({ ...g, lessons_count: counts[g.id] || 0 }));
     setGroups(enriched);
     setLoading(false);
   }, []);
 
-  useEffect(() => {
-    load();
-  }, [load]);
+  useEffect(() => { load(); }, [load]);
 
   const renderItem = ({ item }: { item: Group }) => (
     <TouchableOpacity

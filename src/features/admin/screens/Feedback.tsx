@@ -1,14 +1,8 @@
+// screens/admin/Feedback.tsx
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-  View,
-  Text,
-  FlatList,
-  StyleSheet,
-  TouchableOpacity,
-  Modal,
-  TextInput,
-  Alert,
-  ActivityIndicator,
+  View, Text, FlatList, StyleSheet, TouchableOpacity,
+  Modal, TextInput, Alert, ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import BaseScreen from '../../../components/BaseScreen';
@@ -117,7 +111,7 @@ export default function AdminFeedbackScreen() {
         id: row.id,
         feedback_id: row.feedback_id,
         admin_id: row.admin_id,
-        text: row.body ?? '',          
+        text: row.body ?? '',
         created_at: row.created_at,
       };
       if (!grouped[r.feedback_id]) grouped[r.feedback_id] = [];
@@ -147,13 +141,45 @@ export default function AdminFeedbackScreen() {
     return feedbacks;
   }, [feedbacks, activeTab]);
 
+  // If a thread gets resolved while the reply modal is open, auto-close it
+  useEffect(() => {
+    if (!replyForId) return;
+    const cur = feedbacks.find(f => f.id === replyForId);
+    if (cur?.resolved) {
+      setReplyForId(null);
+      setReplyText('');
+      Alert.alert('Locked', 'This feedback is resolved. You can no longer reply.');
+    }
+  }, [replyForId, feedbacks]);
+
   const openReply = (feedbackId: string) => {
+    const row = feedbacks.find(f => f.id === feedbackId);
+    if (row?.resolved) {
+      Alert.alert('Locked', 'This feedback is resolved. You can no longer reply.');
+      return;
+    }
     setReplyForId(feedbackId);
     setReplyText('');
   };
 
   const sendReply = async () => {
     if (!replyForId || !replyText.trim()) return;
+
+    // Server-side guard: block reply if resolved (pre-insert check)
+    const { data: fchk, error: ferr } = await supabase
+      .from('feedbacks')
+      .select('resolved')
+      .eq('id', replyForId)
+      .single();
+
+    if (ferr) {
+      Alert.alert('Error', ferr.message);
+      return;
+    }
+    if (fchk?.resolved) {
+      Alert.alert('Locked', 'This feedback is resolved. You can no longer reply.');
+      return;
+    }
 
     const { data: ures, error: uerr } = await supabase.auth.getUser();
     const adminId = ures?.user?.id ?? null;
@@ -169,7 +195,7 @@ export default function AdminFeedbackScreen() {
       .insert({
         feedback_id: replyForId,
         admin_id: adminId,
-        body: replyText.trim(),       
+        body: replyText.trim(),
       })
       .select('id,feedback_id,admin_id,body,created_at')
       .single();
@@ -210,27 +236,26 @@ export default function AdminFeedbackScreen() {
     setReplyForId(null);
   };
 
-  const toggleResolved = async (feedbackId: string, newVal: boolean) => {
-    setFeedbacks(prev =>
-      prev.map(f => (f.id === feedbackId ? { ...f, resolved: newVal } : f))
-    );
+  // Only allow changing from Unresolved -> Resolved. No unresolve.
+  const markResolved = async (feedbackId: string) => {
+    // Optimistic update
+    setFeedbacks(prev => prev.map(f => (f.id === feedbackId ? { ...f, resolved: true } : f)));
 
     const { error } = await supabase
       .from('feedbacks')
-      .update({ resolved: newVal })
+      .update({ resolved: true })
       .eq('id', feedbackId);
 
     if (error) {
-      setFeedbacks(prev =>
-        prev.map(f => (f.id === feedbackId ? { ...f, resolved: !newVal } : f))
-      );
+      // rollback on error
+      setFeedbacks(prev => prev.map(f => (f.id === feedbackId ? { ...f, resolved: false } : f)));
       Alert.alert('Error', error.message);
     }
   };
 
   const renderItem = ({ item }: { item: Feedback }) => {
     const replies = repliesByFeedback[item.id] ?? [];
-    const chip = item.resolved ? 'Resolved' : 'Unresolved';
+    const isResolved = !!item.resolved;
 
     return (
       <View style={[styles.card, { backgroundColor: cardBg, borderColor: border }]}>
@@ -246,16 +271,16 @@ export default function AdminFeedbackScreen() {
           <View
             style={[
               styles.statusChip,
-              { borderColor: item.resolved ? '#2ecc71' : '#e67e22' },
+              { borderColor: isResolved ? '#2ecc71' : '#e67e22' },
             ]}
           >
             <Text
               style={[
                 styles.statusTxt,
-                { fontFamily, color: item.resolved ? '#2c7f51' : '#7a4c13' },
+                { fontFamily, color: isResolved ? '#2c7f51' : '#7a4c13' },
               ]}
             >
-              {chip}
+              {isResolved ? 'Resolved (Locked)' : 'Unresolved'}
             </Text>
           </View>
         </View>
@@ -275,6 +300,12 @@ export default function AdminFeedbackScreen() {
           {item.content}
         </Text>
 
+        {isResolved && (
+          <Text style={{ fontSize: 12, color: '#666', marginBottom: 6 }}>
+            Thread locked — cannot reply or unresolve.
+          </Text>
+        )}
+
         {replies.length > 0 && (
           <View style={styles.replyThread}>
             <Text style={[styles.threadLabel, { fontFamily }]}>Admin Replies</Text>
@@ -290,26 +321,38 @@ export default function AdminFeedbackScreen() {
         )}
 
         <View style={styles.actionsRow}>
-          <TouchableOpacity style={[styles.smallBtn, { borderColor: border }]} onPress={() => openReply(item.id)}>
-            <Ionicons name="chatbox-ellipses-outline" size={18} color={textDark} />
-            <Text style={[styles.smallBtnTxt, { fontFamily }]}>Reply</Text>
+          {/* Reply (disabled when resolved) */}
+          <TouchableOpacity
+            style={[
+              styles.smallBtn,
+              { borderColor: isResolved ? '#e6ebf1' : border, opacity: isResolved ? 0.5 : 1 },
+            ]}
+            onPress={() => !isResolved && openReply(item.id)}
+            disabled={isResolved}
+          >
+            <Ionicons name="chatbox-ellipses-outline" size={18} color={isResolved ? '#aaa' : textDark} />
+            <Text style={[styles.smallBtnTxt, { fontFamily, color: isResolved ? '#888' : textDark }]}>
+              Reply
+            </Text>
           </TouchableOpacity>
 
           <View style={{ flex: 1 }} />
 
-          <TouchableOpacity
-            style={[styles.smallBtn, { borderColor: item.resolved ? '#2ecc71' : border }]}
-            onPress={() => toggleResolved(item.id, !item.resolved)}
-          >
-            <Ionicons
-              name={item.resolved ? 'checkmark-done-outline' : 'ellipse-outline'}
-              size={18}
-              color={item.resolved ? '#2ecc71' : textDark}
-            />
-            <Text style={[styles.smallBtnTxt, { fontFamily }]}>
-              {item.resolved ? 'Mark Unresolved' : 'Mark Resolved'}
-            </Text>
-          </TouchableOpacity>
+          {/* Resolve / Locked */}
+          {!isResolved ? (
+            <TouchableOpacity
+              style={[styles.smallBtn, { borderColor: '#2ecc71' }]}
+              onPress={() => markResolved(item.id)}
+            >
+              <Ionicons name="checkmark-done-outline" size={18} color="#2ecc71" />
+              <Text style={[styles.smallBtnTxt, { fontFamily }]}>Mark Resolved</Text>
+            </TouchableOpacity>
+          ) : (
+            <View style={[styles.smallBtn, { borderColor: '#dfe6ee', opacity: 0.8 }]}>
+              <Ionicons name="lock-closed-outline" size={18} color="#888" />
+              <Text style={[styles.smallBtnTxt, { fontFamily, color: '#888' }]}>Locked</Text>
+            </View>
+          )}
         </View>
       </View>
     );
@@ -358,6 +401,7 @@ export default function AdminFeedbackScreen() {
         />
       )}
 
+      {/* Reply Modal */}
       <Modal visible={!!replyForId} transparent animationType="fade" onRequestClose={() => setReplyForId(null)}>
         <View style={styles.modalBackground}>
           <View style={[styles.replyBox, { backgroundColor: '#ffffff', borderColor: border }]}>

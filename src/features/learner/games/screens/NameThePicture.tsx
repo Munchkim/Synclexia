@@ -4,6 +4,7 @@ import BaseScreen from '../../../../components/BaseScreen';
 import { supabase } from '../../../../lib/supabaseClient';
 import { useAppSettings } from '../../../../context/AppSettings';
 import { useNavigation, useRoute } from '@react-navigation/native';
+import { deterministicPick, placeCorrect } from './deterministic';
 
 type Example = { label: string; image_url: string };
 type Item = { promptImage: string; choices: string[]; correctIndex: number; correctLabel: string };
@@ -11,12 +12,17 @@ type Item = { promptImage: string; choices: string[]; correctIndex: number; corr
 const ITEMS_PER_ROUND = 5;
 const TOTAL_ROUNDS = 20;
 const GAME_KIND = 'NAME_PICTURE';
+const GAME_KEY  = 'name_picture' as const;
 
 export default function NamePictureScreen() {
   const { accentColor, fontFamily } = useAppSettings();
   const navigation = useNavigation<any>();
+
   const route = useRoute<any>();
-  const phonicsLessonId: string | null = route?.params?.phonicsLessonId ?? null;
+const phonicsLessonId: string | null = route?.params?.phonicsLessonId ?? null;
+const passedSessionId: string | null = route?.params?.sessionId ?? null;
+const passedRoundIndex: number | undefined = route?.params?.roundIndex;
+
 
   const [userId, setUserId] = useState<string | null>(null);
   const [pool, setPool] = useState<Example[]>([]);
@@ -31,82 +37,103 @@ export default function NamePictureScreen() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    (async () => {
-      setLoading(true);
-      const { data: u } = await supabase.auth.getUser();
-      const user = u?.user;
-      if (!user) { Alert.alert('Login required'); setLoading(false); return; }
-      setUserId(user.id);
+  (async () => {
+    setLoading(true);
 
+    const { data: u } = await supabase.auth.getUser();
+    const user = u?.user;
+    if (!user) { Alert.alert('Login required'); setLoading(false); return; }
+    setUserId(user.id);
+
+    // use passed session if any; else latest for this game kind or create
+    let sid = passedSessionId ?? null;
+    if (!sid) {
       const { data: existing } = await supabase
         .from('game_sessions')
-        .select('id,current_round_index')
+        .select('id,current_round_index,current_item_index')
         .eq('user_id', user.id).eq('kind', GAME_KIND)
         .order('started_at', { ascending: false }).limit(1).maybeSingle();
 
       if (existing?.id) {
-        setSessionId(existing.id);
+        sid = existing.id;
         setRoundIndex(existing.current_round_index ?? 1);
+        setCursor(Math.min(existing.current_item_index ?? 0, ITEMS_PER_ROUND - 1));
       } else {
+        const now = new Date().toISOString();
         const { data: s, error: sErr } = await supabase.from('game_sessions').insert([{
-          user_id: user.id, kind: GAME_KIND, started_at: new Date().toISOString(),
+          user_id: user.id, kind: GAME_KIND, started_at: now,
           total_rounds: TOTAL_ROUNDS, items_per_round: ITEMS_PER_ROUND,
           score: 0, current_round_index: 1, current_item_index: 0, status: 'active'
-        }]).select('id').single();
+        }]).select('id,current_round_index,current_item_index').single();
         if (sErr) { Alert.alert('Error', sErr.message); setLoading(false); return; }
-        setSessionId(s?.id ?? null);
+        sid = s?.id ?? null;
+        setRoundIndex(1);
+        setCursor(0);
       }
+    }
+    setSessionId(sid);
 
-      const { data, error } = await supabase
-        .from('phonics_lessons')
-        .select('examples, order_index')
-        .order('order_index', { ascending: true });
+    // if a roundIndex is explicitly requested (coming from Rounds hub), switch the session to that round
+    if (passedRoundIndex && sid) {
+      await supabase.from('game_sessions')
+        .update({ current_round_index: passedRoundIndex })
+        .eq('id', sid);
+      const { data: sess2 } = await supabase
+        .from('game_sessions')
+        .select('current_item_index')
+        .eq('id', sid)
+        .single();
+      setRoundIndex(passedRoundIndex);
+      setCursor(Math.min(sess2?.current_item_index ?? 0, ITEMS_PER_ROUND - 1));
+    }
 
-      if (error) { Alert.alert('Error', 'Failed to load images.'); setLoading(false); return; }
+    // load pool (unchanged from yours)
+    const { data, error } = await supabase
+      .from('phonics_lessons')
+      .select('examples, order_index')
+      .order('order_index', { ascending: true });
 
-      const uniq = Array.from(
-        new Map(
-          (data || []).flatMap((r: any) => r.examples || [])
-            .filter((e: any) => e?.label && e?.image_url)
-            .map((e: any) => [String(e.label), { label: String(e.label), image_url: String(e.image_url) }])
-        ).values()
-      );
-      setPool(uniq);
-      setLoading(false);
-    })();
-  }, []);
+    if (error) { Alert.alert('Error', 'Failed to load words.'); setLoading(false); return; }
+
+    const uniq: Example[] = Array.from(
+      new Map(
+        (data || []).flatMap((r: any) => r.examples || [])
+          .filter((e: any) => e?.label && e?.image_url)
+          .map((e: any) => [String(e.label), { label: String(e.label), image_url: String(e.image_url) }])
+      ).values()
+    );
+    setPool(uniq);
+    setLoading(false);
+  })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, []);
+
 
   const buildRound = () => {
-    const poolCopy = [...pool].sort(() => Math.random() - 0.5);
-    const chosen: Example[] = [];
-    const usedNow = new Set(used);
+  const poolSorted = [...pool].sort((a,b)=>a.label.localeCompare(b.label) || a.image_url.localeCompare(b.image_url));
+  const chosen = deterministicPick(poolSorted, roundIndex, ITEMS_PER_ROUND);
 
-    for (const ex of poolCopy) {
-      const key = ex.label + '|' + ex.image_url;
-      if (!usedNow.has(key)) {
-        chosen.push(ex); usedNow.add(key);
-        if (chosen.length === ITEMS_PER_ROUND) break;
-      }
-    }
-    if (chosen.length < ITEMS_PER_ROUND) {
-      usedNow.clear();
-      while (chosen.length < ITEMS_PER_ROUND) chosen.push(pool[Math.floor(Math.random() * pool.length)]);
-    }
+  const itemsBuilt: Item[] = chosen.map(correct => {
+    const distractors = poolSorted
+      .filter(e => e.label !== correct.label)
+      .slice(0, 3)
+      .map(e => e.label.toUpperCase());
 
-    const itemsBuilt: Item[] = chosen.map((correct) => {
-      const distractors = pool.filter(e => e.label !== correct.label).sort(() => Math.random() - 0.5).slice(0, 3).map(e => e.label);
-      const choices = [...distractors, correct.label].sort(() => Math.random() - 0.5);
-      const correctIndex = choices.findIndex(c => c === correct.label);
-      return { promptImage: correct.image_url, choices, correctIndex, correctLabel: correct.label };
-    });
+    const correctUpper = correct.label.toUpperCase();
+    const baseChoices = [...distractors, correctUpper];
+    const { arranged, pos } = placeCorrect(baseChoices, correctUpper, correct.label);
 
-    setItems(itemsBuilt);
-    setUsed(usedNow);
-    setCursor(0); setSelected(null);
-    setAnswers(Array(ITEMS_PER_ROUND).fill(null));
-  };
+    return { promptImage: correct.image_url, choices: arranged, correctIndex: pos, correctLabel: correct.label };
+  });
 
-  useEffect(() => { if (pool.length) buildRound(); }, [pool, roundIndex]);
+  setItems(itemsBuilt);
+  if (cursor < 0 || cursor >= ITEMS_PER_ROUND) setCursor(0);
+  if (!answers.length) setAnswers(Array(ITEMS_PER_ROUND).fill(null));
+};
+
+
+useEffect(() => { if (pool.length) buildRound(); /* eslint-disable-next-line */ }, [pool, roundIndex]);
+
   const current = useMemo(() => items[cursor], [items, cursor]);
 
   const nextItem = async () => {
@@ -142,15 +169,22 @@ export default function NamePictureScreen() {
         }).eq('id', sessionId);
         if (advErr) console.warn('session advance error', advErr);
 
-        const { error: insErr } = await supabase.from('game_rounds').insert([{
-          session_id: sessionId, user_id: uid,
-          round_index: roundIndex, score: roundScore, total_items: ITEMS_PER_ROUND,
+      const { error: upErr } = await supabase
+        .from('game_rounds')
+        .upsert([{
+          session_id: sessionId,
+          user_id: uid,
+          round_index: roundIndex,
+          score: roundScore,
+          total_items: ITEMS_PER_ROUND,
           wrong_review_payload: wrong
-        }]);
-        if (insErr) {
-          console.warn('game_rounds insert error', insErr);
-          Alert.alert('Save error', insErr.message || 'Could not save round history.');
-        }
+        }], { onConflict: 'session_id,round_index' });
+
+      if (upErr) {
+        console.warn('game_rounds upsert error', upErr);
+        Alert.alert('Save error', upErr.message || 'Could not save round history.');
+      }
+
       }
 
       if (phonicsLessonId) {
@@ -170,7 +204,7 @@ export default function NamePictureScreen() {
         `Score: ${roundScore}/${ITEMS_PER_ROUND}`,
         [
           { text: 'Review wrong answers', onPress: () => navigation.navigate('GameReview', { wrong }) },
-          { text: 'View all rounds', onPress: () => navigation.navigate('GameRounds', { sessionId }) },
+          { text: 'View all rounds', onPress: () => navigation.navigate('GameRounds', { sessionId, kind: GAME_KEY }) },
           { text: roundIndex >= TOTAL_ROUNDS ? 'Finish' : 'Next Round',
             onPress: () => { if (roundIndex >= TOTAL_ROUNDS) navigation.goBack(); else setRoundIndex(r => r + 1); } },
         ]
@@ -207,11 +241,12 @@ export default function NamePictureScreen() {
         </View>
 
         <Text style={styles.progress}>Item {cursor + 1}/{ITEMS_PER_ROUND}</Text>
-        {sessionId ? (
-          <TouchableOpacity onPress={() => navigation.navigate('GameRounds', { sessionId })}>
-            <Text style={{ textAlign: 'center', marginTop: 6, color: '#777', textDecorationLine: 'underline' }}>View Rounds</Text>
-          </TouchableOpacity>
-        ) : null}
+{sessionId ? (
+  <TouchableOpacity onPress={() => navigation.navigate('GameRounds', { sessionId, kind: GAME_KEY })}>
+    <Text style={{ textAlign: 'center', marginTop: 6, color: '#777', textDecorationLine: 'underline' }}>View Rounds</Text>
+  </TouchableOpacity>
+) : null}
+
       </View>
     </BaseScreen>
   );

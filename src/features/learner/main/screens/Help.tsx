@@ -1,7 +1,8 @@
+// src/features/learner/main/screens/Help.tsx
 import React, { useEffect, useMemo, useState } from 'react';
 import { View, Text, StyleSheet, FlatList, TextInput, ActivityIndicator } from 'react-native';
 import BaseScreen from '../../../../components/BaseScreen';
-import { supabase } from '../../../../../src/lib/supabaseClient';
+import { supabase } from '../../../../lib/supabaseClient';
 
 type FAQ = { id: string; question: string; answer: string; tags: string[]; order_index: number };
 

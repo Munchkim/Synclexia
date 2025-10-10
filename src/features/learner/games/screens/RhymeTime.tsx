@@ -5,6 +5,7 @@ import { supabase } from '../../../../lib/supabaseClient';
 import { useAppSettings } from '../../../../context/AppSettings';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import * as Speech from 'expo-speech';
+import { deterministicPick, placeCorrect } from './deterministic';
 
 type Example = { label: string; image_url: string };
 type Item = { prompt: Example; choices: string[]; correctIndex: number };
@@ -12,6 +13,7 @@ type Item = { prompt: Example; choices: string[]; correctIndex: number };
 const ITEMS_PER_ROUND = 5;
 const TOTAL_ROUNDS = 20;
 const GAME_KIND = 'RHYME_TIME';
+const GAME_KEY  = 'rhyme_time' as const;
 
 const V = ['a','e','i','o','u','y'];
 const RIMES = [
@@ -41,8 +43,12 @@ function rhymeKey(w: string): string | null {
 export default function RhymeTimeScreen() {
   const { accentColor, fontFamily } = useAppSettings();
   const navigation = useNavigation<any>();
+
   const route = useRoute<any>();
   const phonicsLessonId: string | null = route?.params?.phonicsLessonId ?? null;
+  const passedSessionId: string | null = route?.params?.sessionId ?? null;
+  const passedRoundIndex: number | undefined = route?.params?.roundIndex;
+
 
   const [userId, setUserId] = useState<string | null>(null);
   const [pool, setPool] = useState<Example[]>([]);
@@ -57,98 +63,119 @@ export default function RhymeTimeScreen() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    (async () => {
-      setLoading(true);
-      const { data: u } = await supabase.auth.getUser();
-      const user = u?.user;
-      if (!user) { Alert.alert('Login required'); setLoading(false); return; }
-      setUserId(user.id);
+  (async () => {
+    setLoading(true);
 
+    const { data: u } = await supabase.auth.getUser();
+    const user = u?.user;
+    if (!user) { Alert.alert('Login required'); setLoading(false); return; }
+    setUserId(user.id);
+
+    // use passed session if any; else latest for this game kind or create
+    let sid = passedSessionId ?? null;
+    if (!sid) {
       const { data: existing } = await supabase
         .from('game_sessions')
-        .select('id,current_round_index')
+        .select('id,current_round_index,current_item_index')
         .eq('user_id', user.id).eq('kind', GAME_KIND)
         .order('started_at', { ascending: false }).limit(1).maybeSingle();
 
       if (existing?.id) {
-        setSessionId(existing.id);
+        sid = existing.id;
         setRoundIndex(existing.current_round_index ?? 1);
+        setCursor(Math.min(existing.current_item_index ?? 0, ITEMS_PER_ROUND - 1));
       } else {
+        const now = new Date().toISOString();
         const { data: s, error: sErr } = await supabase.from('game_sessions').insert([{
-          user_id: user.id, kind: GAME_KIND, started_at: new Date().toISOString(),
+          user_id: user.id, kind: GAME_KIND, started_at: now,
           total_rounds: TOTAL_ROUNDS, items_per_round: ITEMS_PER_ROUND,
           score: 0, current_round_index: 1, current_item_index: 0, status: 'active'
-        }]).select('id').single();
+        }]).select('id,current_round_index,current_item_index').single();
         if (sErr) { Alert.alert('Error', sErr.message); setLoading(false); return; }
-        setSessionId(s?.id ?? null);
+        sid = s?.id ?? null;
+        setRoundIndex(1);
+        setCursor(0);
       }
+    }
+    setSessionId(sid);
 
-      const { data, error } = await supabase
-        .from('phonics_lessons')
-        .select('examples, order_index').order('order_index', { ascending: true });
-      if (error) { Alert.alert('Error', 'Failed to load words.'); setLoading(false); return; }
+    // if a roundIndex is explicitly requested (coming from Rounds hub), switch the session to that round
+    if (passedRoundIndex && sid) {
+      await supabase.from('game_sessions')
+        .update({ current_round_index: passedRoundIndex })
+        .eq('id', sid);
+      const { data: sess2 } = await supabase
+        .from('game_sessions')
+        .select('current_item_index')
+        .eq('id', sid)
+        .single();
+      setRoundIndex(passedRoundIndex);
+      setCursor(Math.min(sess2?.current_item_index ?? 0, ITEMS_PER_ROUND - 1));
+    }
 
-      const uniq: Example[] = Array.from(
-        new Map(
-          (data || []).flatMap((r: any) => (r.examples || []) as Example[])
-            .filter((e) => e?.label && e?.image_url)
-            .map((e) => [String(e.label), ({ label: String(e.label), image_url: String(e.image_url) })])
-        ).values()
-      );
+    // load pool (unchanged from yours)
+    const { data, error } = await supabase
+      .from('phonics_lessons')
+      .select('examples, order_index')
+      .order('order_index', { ascending: true });
 
-      const byKey = new Map<string, Example[]>();
-      for (const e of uniq) {
-        const k = rhymeKey(e.label);
-        if (!k) continue;
-        byKey.set(k, [...(byKey.get(k) || []), e]);
-      }
-      const candidates = uniq.filter(e => {
-        const k = rhymeKey(e.label);
-        return !!k && (byKey.get(k)?.length || 0) >= 2;
-      });
+    if (error) { Alert.alert('Error', 'Failed to load words.'); setLoading(false); return; }
 
-      setPool(candidates);
-      setLoading(false);
-    })();
-  }, []);
+    const uniq: Example[] = Array.from(
+      new Map(
+        (data || []).flatMap((r: any) => r.examples || [])
+          .filter((e: any) => e?.label && e?.image_url)
+          .map((e: any) => [String(e.label), { label: String(e.label), image_url: String(e.image_url) }])
+      ).values()
+    );
+    setPool(uniq);
+    setLoading(false);
+  })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, []);
+
 
   const buildRound = () => {
-    const poolCopy = [...pool].sort(() => Math.random() - 0.5);
-    const picked: Example[] = [];
-    const usedNow = new Set(used);
-
-    for (const ex of poolCopy) {
-      if (picked.length === ITEMS_PER_ROUND) break;
-      if (usedNow.has(ex.label)) continue;
-      const key = rhymeKey(ex.label);
-      if (!key) continue;
-      const partners = poolCopy.filter(x => x.label !== ex.label && rhymeKey(x.label) === key);
-      if (!partners.length) continue;
-      picked.push(ex); usedNow.add(ex.label);
-    }
-    while (picked.length < ITEMS_PER_ROUND && poolCopy.length) {
-      const ex = poolCopy[Math.floor(Math.random() * poolCopy.length)];
-      if (!picked.find(p => p.label === ex.label)) picked.push(ex);
-    }
-
-    const itemsBuilt: Item[] = picked.map(prompt => {
-      const key = rhymeKey(prompt.label)!;
-      const partners = pool.filter(x => x.label !== prompt.label && rhymeKey(x.label) === key);
-      const correctLabel = partners[Math.floor(Math.random()*partners.length)]?.label || prompt.label;
-      const wrongs = pool.filter(x => x.label !== prompt.label && rhymeKey(x.label) !== key)
-        .sort(() => Math.random() - 0.5).slice(0, 3).map(x => x.label);
-      const choices = [...wrongs, correctLabel].sort(() => Math.random() - 0.5);
-      const correctIndex = choices.findIndex(c => c === correctLabel);
-      return { prompt, choices, correctIndex };
+  // stable candidate pool: items that have at least one rhyming partner
+  const byKey = new Map<string, Example[]>();
+  [...pool]
+    .sort((a,b)=>a.label.localeCompare(b.label))
+    .forEach(e => {
+      const k = rhymeKey(e.label);
+      if (!k) return;
+      byKey.set(k, [...(byKey.get(k) || []), e]);
     });
 
-    setItems(itemsBuilt);
-    setUsed(usedNow);
-    setCursor(0); setSelected(null);
-    setAnswers(Array(ITEMS_PER_ROUND).fill(null));
-  };
+  const candidates = [...pool]
+    .filter(e => { const k = rhymeKey(e.label); return !!k && (byKey.get(k)?.length || 0) >= 2; })
+    .sort((a,b)=>a.label.localeCompare(b.label));
 
-  useEffect(() => { if (pool.length) buildRound(); }, [pool, roundIndex]);
+  const chosen = deterministicPick(candidates, roundIndex, ITEMS_PER_ROUND);
+
+  const itemsBuilt: Item[] = chosen.map(prompt => {
+    const key = rhymeKey(prompt.label)!;
+
+    const partners = (byKey.get(key) || []).filter(x => x.label !== prompt.label).sort((a,b)=>a.label.localeCompare(b.label));
+    const correctLabel = partners[0]?.label ?? prompt.label;
+
+    const wrongs = [...pool]
+      .filter(x => rhymeKey(x.label) !== key && x.label !== correctLabel)
+      .sort((a,b)=>a.label.localeCompare(b.label))
+      .slice(0, 3)
+      .map(x => x.label);
+
+    const baseChoices = [...wrongs, correctLabel].map(s => s.toUpperCase());
+    const { arranged, pos } = placeCorrect(baseChoices, correctLabel.toUpperCase(), prompt.label);
+    return { prompt, choices: arranged, correctIndex: pos };
+  });
+
+  setItems(itemsBuilt);
+  if (cursor < 0 || cursor >= ITEMS_PER_ROUND) setCursor(0);
+  if (!answers.length) setAnswers(Array(ITEMS_PER_ROUND).fill(null));
+};
+
+useEffect(() => { if (pool.length) buildRound(); /* eslint-disable-next-line */ }, [pool, roundIndex]);
+
   const current = useMemo(() => items[cursor], [items, cursor]);
 
   const speak = () => { if (current?.prompt?.label) Speech.speak(current.prompt.label, { rate: 0.9, pitch: 1, language: 'en-US' }); };
@@ -185,15 +212,22 @@ export default function RhymeTimeScreen() {
         }).eq('id', sessionId);
         if (advErr) console.warn('session advance error', advErr);
 
-        const { error: insErr } = await supabase.from('game_rounds').insert([{
-          session_id: sessionId, user_id: uid,
-          round_index: roundIndex, score: roundScore, total_items: ITEMS_PER_ROUND,
+      const { error: upErr } = await supabase
+        .from('game_rounds')
+        .upsert([{
+          session_id: sessionId,
+          user_id: uid,
+          round_index: roundIndex,
+          score: roundScore,
+          total_items: ITEMS_PER_ROUND,
           wrong_review_payload: wrong
-        }]);
-        if (insErr) {
-          console.warn('game_rounds insert error', insErr);
-          Alert.alert('Save error', insErr.message || 'Could not save round history.');
-        }
+        }], { onConflict: 'session_id,round_index' });
+
+      if (upErr) {
+        console.warn('game_rounds upsert error', upErr);
+        Alert.alert('Save error', upErr.message || 'Could not save round history.');
+      }
+
       }
 
       if (phonicsLessonId) {
@@ -213,7 +247,7 @@ export default function RhymeTimeScreen() {
         `Score: ${roundScore}/${ITEMS_PER_ROUND}`,
         [
           { text: 'Review wrong answers', onPress: () => navigation.navigate('GameReview', { wrong }) },
-          { text: 'View all rounds', onPress: () => navigation.navigate('GameRounds', { sessionId }) },
+          { text: 'View all rounds', onPress: () => navigation.navigate('GameRounds', { sessionId, kind: GAME_KEY }) },
           { text: roundIndex >= TOTAL_ROUNDS ? 'Finish' : 'Next Round',
             onPress: () => { if (roundIndex >= TOTAL_ROUNDS) navigation.goBack(); else setRoundIndex(r => r + 1); } },
         ]
@@ -254,11 +288,12 @@ export default function RhymeTimeScreen() {
         </View>
 
         <Text style={styles.progress}>Item {cursor + 1}/{ITEMS_PER_ROUND}</Text>
-        {sessionId ? (
-          <TouchableOpacity onPress={() => navigation.navigate('GameRounds', { sessionId })}>
-            <Text style={{ textAlign: 'center', marginTop: 6, color: '#777', textDecorationLine: 'underline' }}>View Rounds</Text>
-          </TouchableOpacity>
-        ) : null}
+{sessionId ? (
+  <TouchableOpacity onPress={() => navigation.navigate('GameRounds', { sessionId, kind: GAME_KEY })}>
+    <Text style={{ textAlign: 'center', marginTop: 6, color: '#777', textDecorationLine: 'underline' }}>View Rounds</Text>
+  </TouchableOpacity>
+) : null}
+
       </View>
     </BaseScreen>
   );
